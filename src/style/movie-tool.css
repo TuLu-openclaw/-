@@ -2164,3 +2164,229 @@
   .tvbox-player-box { max-height: calc(100vh - 12px); }
 }
 
+
+/* ===== 企业级官方风格增强：XingShu Movie Design System ===== */
+:root {
+  --xsm-enterprise-bg: #f5f7fb;
+  --xsm-enterprise-surface: rgba(255, 255, 255, 0.96);
+  --xsm-enterprise-surface-strong: #ffffff;
+  --xsm-enterprise-border: rgba(15, 23, 42, 0.10);
+  --xsm-enterprise-border-strong: rgba(15, 23, 42, 0.18);
+  --xsm-enterprise-text: #111827;
+  --xsm-enterprise-muted: #64748b;
+  --xsm-enterprise-primary: #0a59f7;
+  --xsm-enterprise-primary-2: #2563eb;
+  --xsm-enterprise-focus: rgba(10, 89, 247, 0.28);
+  --xsm-enterprise-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  --xsm-enterprise-shadow-soft: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="dark"] {
+  --xsm-enterprise-bg: #090d14;
+  --xsm-enterprise-surface: rgba(17, 24, 39, 0.92);
+  --xsm-enterprise-surface-strong: #111827;
+  --xsm-enterprise-border: rgba(226, 232, 240, 0.10);
+  --xsm-enterprise-border-strong: rgba(226, 232, 240, 0.18);
+  --xsm-enterprise-text: #f8fafc;
+  --xsm-enterprise-muted: #94a3b8;
+  --xsm-enterprise-primary: #5b8cff;
+  --xsm-enterprise-primary-2: #7aa2ff;
+  --xsm-enterprise-focus: rgba(91, 140, 255, 0.34);
+  --xsm-enterprise-shadow: 0 22px 64px rgba(0, 0, 0, 0.44);
+  --xsm-enterprise-shadow-soft: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
+.tvbox-app,
+.tvbox-root {
+  background:
+    radial-gradient(circle at 18% -10%, rgba(10, 89, 247, 0.12), transparent 34%),
+    linear-gradient(180deg, var(--xsm-enterprise-bg), var(--bg-primary, var(--xsm-enterprise-bg)) 42%);
+}
+
+.tvbox-header,
+.tvbox-navbar {
+  border-bottom: 1px solid var(--xsm-enterprise-border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset, 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.tvbox-header-inner,
+.tvbox-content,
+.tvbox-source-inner,
+.tvbox-navbar > * {
+  scrollbar-gutter: stable;
+}
+
+.tvbox-logo,
+.tvbox-brand-name,
+.tvbox-section-title,
+.tvbox-section-heading,
+.tvbox-detail-info h3,
+.tvbox-detail-name {
+  letter-spacing: -0.02em;
+}
+
+.tvbox-logo-icon,
+.tvbox-brand-icon {
+  box-shadow: 0 10px 28px rgba(10, 89, 247, 0.28);
+}
+
+.tvbox-search-wrap input,
+.tvbox-search-box,
+.tvbox-source-btn,
+.tvbox-cat-tabs button,
+.tvbox-mode-tab,
+.tvbox-cat-chip,
+.tvbox-src-chip,
+.tvbox-library-tab,
+.tvbox-page button,
+.tvbox-page-btn,
+.tvbox-ep-btn,
+.tvbox-source-tab,
+.tvbox-player-btn,
+.tvbox-player-close,
+.tvbox-player-mini,
+.tvbox-close-player {
+  border-color: var(--xsm-enterprise-border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset;
+}
+
+.tvbox-search-wrap input:focus,
+.tvbox-search-input:focus,
+.tvbox-edit-field input:focus,
+.tvbox-edit-field select:focus {
+  border-color: var(--xsm-enterprise-primary) !important;
+  box-shadow: 0 0 0 4px var(--xsm-enterprise-focus) !important;
+}
+
+.tvbox-search-btn,
+.tvbox-source-btn.active,
+.tvbox-cat-tabs button.active,
+.tvbox-mode-tab.active,
+.tvbox-cat-chip.active,
+.tvbox-library-tab.active,
+.tvbox-edit-save,
+.tvbox-player-error button {
+  background: linear-gradient(135deg, var(--xsm-enterprise-primary), var(--xsm-enterprise-primary-2)) !important;
+  box-shadow: 0 10px 28px rgba(10, 89, 247, 0.22);
+}
+
+.tvbox-card-inner,
+.tvbox-card,
+.tvbox-live-card,
+.tvbox-history-item,
+.tvbox-source-item,
+.tvbox-detail,
+.tvbox-edit-box,
+.tvbox-player-box {
+  border-color: var(--xsm-enterprise-border);
+  box-shadow: var(--xsm-enterprise-shadow-soft);
+}
+
+.tvbox-card:hover .tvbox-card-inner,
+.tvbox-card:hover,
+.tvbox-live-card:hover,
+.tvbox-history-item:hover,
+.tvbox-source-item:hover {
+  border-color: var(--xsm-enterprise-primary) !important;
+  box-shadow: var(--xsm-enterprise-shadow);
+}
+
+.tvbox-card-title,
+.tvbox-name,
+.tvbox-live-name,
+.tvbox-history-name {
+  color: var(--xsm-enterprise-text);
+}
+
+.tvbox-card-sub,
+.tvbox-detail-desc,
+.tvbox-history-meta,
+.tvbox-page-info,
+.tvbox-source-label,
+.tvbox-catbar-label,
+.tvbox-srcbar-label {
+  color: var(--xsm-enterprise-muted);
+}
+
+.tvbox-player-overlay,
+.tvbox-modal,
+.tvbox-edit-modal,
+.tvbox-url-overlay {
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.tvbox-player-box {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.tvbox-video-wrap video,
+.tvbox-player-body video,
+.tvbox-player-body iframe {
+  background: #000;
+  border-radius: 0 0 14px 14px;
+}
+
+.tvbox-device-tv .tvbox-card:focus .tvbox-card-inner,
+.tvbox-device-tv .tvbox-live-card:focus,
+.tvbox-device-tv .tvbox-history-item:focus,
+.tvbox-device-tv .tvbox-root button:focus,
+.tvbox-device-tv .tvbox-root input:focus,
+.tvbox-focusable:focus-visible {
+  outline: 4px solid #ffffff !important;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 9px var(--xsm-enterprise-focus), var(--xsm-enterprise-shadow) !important;
+}
+
+.tvbox-device-tv .tvbox-card-title,
+.tvbox-device-tv .tvbox-name {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.tvbox-device-tv .tvbox-source-inner,
+.tvbox-device-tv .tvbox-catbar,
+.tvbox-device-tv .tvbox-srcbar {
+  scroll-padding-inline: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tvbox-root *,
+  .tvbox-app * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .tvbox-card-inner,
+  .tvbox-live-card,
+  .tvbox-history-item,
+  .tvbox-source-item,
+  .tvbox-search-wrap input,
+  .tvbox-search-box,
+  .tvbox-root button {
+    border-width: 2px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .tvbox-card-inner,
+  .tvbox-card,
+  .tvbox-live-card,
+  .tvbox-history-item {
+    box-shadow: none;
+  }
+
+  .tvbox-card:hover,
+  .tvbox-card:hover .tvbox-card-inner,
+  .tvbox-live-card:hover,
+  .tvbox-history-item:hover {
+    transform: none;
+  }
+}
+

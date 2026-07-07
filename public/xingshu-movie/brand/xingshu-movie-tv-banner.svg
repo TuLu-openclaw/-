@@ -1,0 +1,25 @@
+<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="96" y1="44" x2="1180" y2="676" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#07152F"/>
+      <stop offset="0.48" stop-color="#0A59F7"/>
+      <stop offset="1" stop-color="#050812"/>
+    </linearGradient>
+    <linearGradient id="play" x1="492" y1="200" x2="780" y2="516" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#74D7FF"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1280" height="720" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="30" stdDeviation="46" flood-color="#00133D" flood-opacity="0.46"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="720" rx="96" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <path d="M188 246C352 106 680 94 922 206C1120 298 1106 470 900 578C666 700 318 654 166 500" stroke="#CFEAFF" stroke-width="30" stroke-linecap="round" opacity="0.82"/>
+    <path d="M456 176C456 136 500 111 534 132L822 306C856 326 856 374 822 394L534 568C500 589 456 564 456 524V176Z" fill="url(#play)"/>
+    <circle cx="244" cy="496" r="22" fill="#FFFFFF"/>
+    <circle cx="942" cy="210" r="18" fill="#DDF7FF"/>
+    <circle cx="996" cy="548" r="16" fill="#72F0FF"/>
+  </g>
+  <text x="640" y="654" text-anchor="middle" fill="#F8FBFF" font-family="HarmonyOS Sans SC, PingFang SC, Microsoft YaHei, sans-serif" font-size="58" font-weight="900" letter-spacing="2">星枢屠戮影视</text>
+</svg>

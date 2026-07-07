@@ -1,0 +1,18 @@
+{
+  "name": "星枢屠戮影视",
+  "short_name": "星枢影视",
+  "description": "面向手机、TV 与桌面平台的星枢影视客户端",
+  "start_url": "/tvbox-index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050B18",
+  "theme_color": "#0A59F7",
+  "icons": [
+    { "src": "/xingshu-movie/brand/png/xingshu-movie-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/xingshu-movie/brand/png/xingshu-movie-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/xingshu-movie/brand/png/xingshu-movie-icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ],
+  "screenshots": [
+    { "src": "/xingshu-movie/brand/png/xingshu-movie-tv-banner-1280x720.png", "sizes": "1280x720", "type": "image/png", "form_factor": "wide" }
+  ]
+}

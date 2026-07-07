@@ -1,0 +1,34 @@
+<svg width="1920" height="640" viewBox="0 0 1920 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="markBg" x1="66" y1="48" x2="530" y2="592" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#081B4E"/>
+      <stop offset="0.5" stop-color="#0A59F7"/>
+      <stop offset="1" stop-color="#07111F"/>
+    </linearGradient>
+    <linearGradient id="word" x1="640" y1="164" x2="1540" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="0.45" stop-color="#DDEBFF"/>
+      <stop offset="1" stop-color="#86BFFF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="160" y1="132" x2="492" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#70D8FF"/>
+    </linearGradient>
+    <filter id="soft" x="0" y="0" width="620" height="640" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="34" flood-color="#00133D" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+  <rect width="1920" height="640" rx="64" fill="#050B18"/>
+  <g filter="url(#soft)">
+    <rect x="96" y="80" width="480" height="480" rx="128" fill="url(#markBg)"/>
+    <path d="M154 206C224 138 366 126 478 180C570 225 572 306 482 366C376 438 214 434 148 364" stroke="#CDEBFF" stroke-width="18" stroke-linecap="round"/>
+    <path d="M504 438C438 502 296 516 184 462" stroke="#62DBFF" stroke-width="12" stroke-linecap="round" opacity="0.68"/>
+    <path d="M284 198C284 176 308 162 327 174L458 253C477 265 477 293 458 305L327 384C308 396 284 382 284 360V198Z" fill="url(#accent)"/>
+    <circle cx="192" cy="354" r="13" fill="#FFFFFF"/>
+    <circle cx="500" cy="202" r="11" fill="#DBF5FF"/>
+  </g>
+  <text x="648" y="292" fill="url(#word)" font-family="HarmonyOS Sans SC, PingFang SC, Microsoft YaHei, sans-serif" font-size="112" font-weight="900" letter-spacing="-4">星枢屠戮影视</text>
+  <text x="654" y="388" fill="#8FA8CC" font-family="Inter, HarmonyOS Sans, Arial, sans-serif" font-size="38" font-weight="600" letter-spacing="8">XINGSHU MOVIE CLIENT</text>
+  <path d="M654 438H1180" stroke="#0A59F7" stroke-width="10" stroke-linecap="round"/>
+  <path d="M1210 438H1374" stroke="#62DBFF" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
+</svg>

@@ -795,8 +795,6 @@ pub async fn openmontage_open_studio(app: tauri::AppHandle) -> Result<Value, Str
         .min_inner_size(1100.0, 720.0)
         .resizable(true)
         .visible(true)
-        .focused(true)
-        .center()
         .build()
         .map_err(|e| format!("打开 OpenMontage 内置工作台窗口失败: {e}"))?;
 

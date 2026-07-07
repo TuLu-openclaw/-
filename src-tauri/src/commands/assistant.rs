@@ -2037,7 +2037,6 @@ pub async fn open_player_window(
     .min_inner_size(640.0, 400.0)
     .resizable(true)
     .decorations(true)
-    .center()
     .build()
     .map_err(|e| format!("创建播放器窗口失败: {}", e))?;
 
@@ -2252,7 +2251,6 @@ pub async fn open_lobster_office(app: tauri::AppHandle) -> Result<String, String
     .min_inner_size(960.0, 640.0)
     .resizable(true)
     .decorations(true)
-    .center()
     .build()
     .map_err(|e| format!("创建龙虾办公室窗口失败: {}", e))?;
 
@@ -2277,7 +2275,6 @@ pub async fn open_xingshu_chat_window(app: tauri::AppHandle) -> Result<String, S
         .inner_size(1280.0, 820.0)
         .min_inner_size(980.0, 640.0)
         .resizable(true)
-        .center()
         .build()
         .map_err(|e| format!("创建星枢聊天室窗口失败: {}", e))?;
 
@@ -2306,8 +2303,6 @@ async fn open_xingshu_skill_url_window(
         .min_inner_size(980.0, 640.0)
         .resizable(true)
         .visible(true)
-        .focused(true)
-        .center()
         .build()
         .map_err(|e| format!("创建{}窗口失败: {}", title, e))?;
 
@@ -2437,11 +2432,9 @@ pub async fn open_global_builtin_window(
         .initialization_script(hooks_js)
         .title("全球内置")
         .inner_size(1200.0, 800.0)
-        .center()
         .resizable(true)
         .decorations(true)
         .visible(true)
-        .focused(true)
         .build()
         .map_err(|e| {
             eprintln!("[open_global_builtin_window] build ERR: {}", e);
@@ -2720,7 +2713,6 @@ pub async fn open_live_player(
     .inner_size(1280.0, 720.0)
     .min_inner_size(640.0, 360.0)
     .resizable(true)
-    .always_on_top(false)
     .build()
     .map_err(|e| format!("创建播放器窗口失败: {}", e))?;
 

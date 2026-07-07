@@ -2,18 +2,11 @@ name: Mobile and TV Client Release
 
 on:
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Release version (e.g. v4.3.8)"
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: write
 
 env:
-  TAG_NAME: ${{ github.event.inputs.tag_name || format('manual-{0}', github.run_number) }}
   CARGO_BUILD_JOBS: 2
   RUSTFLAGS: "-C codegen-units=1"
 
@@ -56,15 +49,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefer-offline
 
-      - name: Verify version tag
+      - name: Resolve client build version
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          EXPECTED="v${VERSION}"
-          if [ "${TAG_NAME}" != "${EXPECTED}" ]; then
-            echo "Release tag ${TAG_NAME} does not match package.json version ${VERSION} (expected ${EXPECTED})" >&2
-            exit 1
-          fi
+          APP_VERSION="v${VERSION}"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Manual client build for ${APP_VERSION}; no git tag or release is required."
 
       - name: Prepare bundled runtime
         run: node scripts/prepare-runtime.mjs linux-x64
@@ -81,19 +72,19 @@ jobs:
       - name: Normalize artifact tag
         shell: bash
         run: |
-          SAFE_TAG_NAME="${TAG_NAME//\//-}"
-          echo "SAFE_TAG_NAME=$SAFE_TAG_NAME" >> "$GITHUB_ENV"
+          SAFE_APP_VERSION="${APP_VERSION//\//-}"
+          echo "SAFE_APP_VERSION=$SAFE_APP_VERSION" >> "$GITHUB_ENV"
 
       - name: Upload Android APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: XingShuOpenClaw-${{ env.SAFE_TAG_NAME }}-Android-Mobile-TV-APK
+          name: XingShuOpenClaw-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-APK
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
 
       - name: Upload Android AAB artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: XingShuOpenClaw-${{ env.SAFE_TAG_NAME }}-Android-Mobile-TV-AAB
+          name: XingShuOpenClaw-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-AAB
           path: src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
 
   apple-mobile-readiness:

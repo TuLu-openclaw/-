@@ -76,23 +76,7 @@ jobs:
         run: npx tauri android init --ci
 
       - name: Apply TV client manifest hints
-        shell: bash
-        run: |
-          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            node - <<'NODE'
-            const fs = require('fs')
-            const manifest = 'src-tauri/gen/android/app/src/main/AndroidManifest.xml'
-            let text = fs.readFileSync(manifest, 'utf8')
-            if (!text.includes('android.software.leanback')) {
-              text = text.replace(/<manifest([^>]*)>/, '<manifest$1>\n    <uses-feature android:name="android.software.leanback" android:required="false" />\n    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />')
-            }
-            if (!text.includes('android.intent.category.LEANBACK_LAUNCHER')) {
-              text = text.replace(/<category android:name="android.intent.category.LAUNCHER"\s*\/>/, '<category android:name="android.intent.category.LAUNCHER" />\n                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />')
-            }
-            fs.writeFileSync(manifest, text)
-            NODE
-          fi
+        run: node scripts/patch-android-tv-manifest.mjs
 
       - name: Build Android APK and AAB
         run: npx tauri android build --apk --aab --split-per-abi --ci

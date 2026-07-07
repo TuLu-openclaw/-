@@ -1,0 +1,88 @@
+name: Android Mobile and TV Client Build
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_BUILD_JOBS: 2
+  RUSTFLAGS: "-C codegen-units=1"
+
+jobs:
+  android-mobile-tv:
+    name: Android Phone / Tablet / TV APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager "ndk;27.0.12077973" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: npm ci --prefer-offline
+
+      - name: Resolve client build version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          APP_VERSION="v${VERSION}"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "SAFE_APP_VERSION=${APP_VERSION//\//-}" >> "$GITHUB_ENV"
+          echo "Building XingShu Movie Android client ${APP_VERSION} without git tag or GitHub Release."
+
+      - name: Prepare bundled runtime
+        run: node scripts/prepare-runtime.mjs linux-x64
+
+      - name: Initialize Android project
+        run: npx tauri android init --ci
+
+      - name: Apply TV client manifest hints
+        run: node scripts/patch-android-tv-manifest.mjs
+
+      - name: Build Android APK and AAB
+        run: npx tauri android build --apk --aab --split-per-abi --ci
+
+      - name: Upload Android APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: XingShuMovie-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-APK
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+      - name: Upload Android AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: XingShuMovie-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-AAB
+          path: src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: warn

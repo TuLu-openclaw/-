@@ -8,6 +8,11 @@ fn main() {
 }
 
 fn sync_runtime_dir(manifest_dir: &str) {
+    if is_android_target() {
+        println!("cargo:warning=skip desktop runtime sync for Android target");
+        return;
+    }
+
     let src_root = std::path::Path::new(&manifest_dir)
         .join("..")
         .join("_vendor")
@@ -63,6 +68,12 @@ fn sync_runtime_dir(manifest_dir: &str) {
     } else {
         panic!("runtime src NOT FOUND for {}", target_key);
     }
+}
+
+fn is_android_target() -> bool {
+    std::env::var("TARGET")
+        .map(|target| target.contains("android"))
+        .unwrap_or(false)
 }
 
 fn allow_runtime_placeholder() -> bool {

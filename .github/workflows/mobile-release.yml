@@ -1,7 +1,7 @@
 name: Mobile and TV Client Release
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write

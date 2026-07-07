@@ -1,0 +1,791 @@
+/**
+ * Tauri API 封装层
+ * Tauri 环境用 invoke，Web 模式走 dev-api 后端
+ */
+
+import { t } from './i18n.js'
+
+export function isTauriRuntime() {
+  return !!window.__TAURI_INTERNALS__ || !!window.__TAURI__ || window.location?.hostname === 'tauri.localhost'
+}
+
+// npm 包名映射
+const NPM_PACKAGES = {
+  official: 'openclaw',
+  chinese: '@qingchencloud/openclaw-zh',
+}
+
+// 解析版本号用于排序
+function parseVersion(v) {
+  const parts = v.replace(/^v/, '').split('-')[0].split('.')
+  return parts.map(p => parseInt(p, 10) || 0)
+}
+
+const NPM_REGISTRIES = {
+  official: 'https://registry.npmjs.org',
+  chinese: null, // filled from user config at runtime
+}
+
+// 尝试多个 registry，直到成功
+async function fetchWithFallback(path, timeout = 5000) {
+  let userRegistry = null
+  try {
+    userRegistry = await cachedInvoke('get_npm_registry', {}, 30000)
+  } catch {
+    userRegistry = null
+  }
+
+  const registries = []
+  if (NPM_REGISTRIES.official) registries.push(NPM_REGISTRIES.official)
+  if (userRegistry) registries.push(String(userRegistry).replace(/\/$/, ''))
+
+  const seen = new Set()
+  const unique = registries.filter(r => seen.has(r) ? false : seen.add(r))
+
+  for (const base of unique) {
+    let timer = null
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      timer = controller ? setTimeout(() => controller.abort(), timeout) : null
+      const resp = await fetch(`${base}${path}`, controller ? { signal: controller.signal } : undefined)
+      if (timer) clearTimeout(timer)
+      if (resp.ok) return { ok: true, json: await resp.json(), registry: base }
+    } catch {
+      // try next
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+  return { ok: false, json: null, registry: null }
+}
+
+async function fetchNpmLatest(source) {
+  const pkg = NPM_PACKAGES[source] || source
+  const encoded = pkg.replace('/', '%2F').replace('@', '%40')
+  const result = await fetchWithFallback(`/${encoded}/latest`, 5000)
+  if (!result.ok) return null
+  return result.json?.version || null
+}
+
+async function fetchNpmAllVersions(source) {
+  const pkg = NPM_PACKAGES[source] || source
+  const encoded = pkg.replace('/', '%2F').replace('@', '%40')
+  const result = await fetchWithFallback(`/${encoded}`, 30000)
+  if (!result.ok) {
+    console.warn('[version] all registries failed for', pkg)
+    return null
+  }
+  const obj = (result.json && typeof result.json === 'object' && result.json.versions) ? result.json.versions : {}
+  if (Object.keys(obj).length === 0) return null
+  return Object.keys(obj).sort((a, b) => {
+    const pa = parseVersion(a); const pb = parseVersion(b)
+    return pb[0] - pa[0] || pb[1] - pa[1] || pb[2] - pa[2]
+  })
+}
+
+// 获取版本信息：本地部分走 Rust，远程部分走 JS fetch（解决 Rust 网络限制）
+async function getVersionInfoViaJs() {
+  const localInfo = await invoke('get_version_info_local', {}).catch(() => null)
+  if (!localInfo) {
+    return {
+      current: null,
+      latest: null,
+      recommended: null,
+      update_available: false,
+      latest_update_available: false,
+      is_recommended: false,
+      ahead_of_recommended: false,
+      panel_version: '0.0.0',
+      source: 'unknown',
+      cli_path: null,
+      cli_source: null,
+      all_installations: [],
+    }
+  }
+
+  const source = localInfo.source || 'unknown'
+  const current = localInfo.current || null
+
+  const [latest, recommended] = await Promise.all([
+    source !== 'unknown' ? fetchNpmLatest(source).catch(() => null) : Promise.resolve(null),
+    Promise.resolve(localInfo.recommended || null),
+  ])
+
+  const update_available = recommended
+    ? recommended_is_newer(recommended, current || '0.0.0')
+    : false
+  const latest_update_available = latest && current
+    ? recommended_is_newer(latest, current)
+    : false
+  const is_recommended = current && recommended ? versions_match(current, recommended) : false
+  const ahead_of_recommended = current && recommended ? recommended_is_newer(current, recommended) : false
+
+  return {
+    current,
+    latest,
+    recommended,
+    update_available,
+    latest_update_available,
+    is_recommended,
+    ahead_of_recommended,
+    panel_version: localInfo.panel_version || '0.0.0',
+    source,
+    cli_path: localInfo.cli_path || null,
+    cli_source: localInfo.cli_source || null,
+    all_installations: localInfo.all_installations || [],
+  }
+}
+
+function recommended_is_newer(newVer, oldVer) {
+  const np = parseVersion(newVer), op = parseVersion(oldVer)
+  for (let i = 0; i < 3; i++) {
+    if (np[i] > op[i]) return true
+    if (np[i] < op[i]) return false
+  }
+  return false
+}
+
+function versions_match(a, b) {
+  return parseVersion(a)[0] === parseVersion(b)[0]
+}
+
+// 仅在 Node.js 后端实现的命令（Tauri Rust 不处理），强制走 webInvoke
+const WEB_ONLY_CMDS = new Set([
+  'instance_list', 'instance_add', 'instance_remove', 'instance_set_active',
+  'instance_health_check', 'instance_health_all',
+  'docker_info', 'docker_list_containers', 'docker_create_container',
+  'docker_start_container', 'docker_stop_container', 'docker_restart_container',
+  'docker_remove_container', 'docker_pull_image', 'docker_pull_status',
+  'docker_list_images', 'docker_list_nodes', 'docker_add_node',
+  'docker_remove_node', 'docker_cluster_overview',
+  'get_deploy_mode', 'get_deploy_config',
+])
+
+let _invokeReady = null
+
+async function getTauriInvoke() {
+  if (!isTauriRuntime()) return null
+  if (!_invokeReady) {
+    _invokeReady = import('@tauri-apps/api/core').then(m => m.invoke)
+  }
+  return _invokeReady
+}
+
+// 简单缓存：避免页面切换时重复请求后端
+const _cache = new Map()
+const _inflight = new Map() // in-flight 请求去重，防止缓存过期后同一命令并发 spawn 多个进程
+const CACHE_TTL = 15000 // 15秒
+
+// 网络请求日志（用于调试）
+const _requestLogs = []
+const MAX_LOGS = 100
+
+function logRequest(cmd, args, duration, cached = false, err = '') {
+  const log = {
+    timestamp: Date.now(),
+    time: new Date().toLocaleTimeString('zh-CN', { hour12: false, fractionalSecondDigits: 3 }),
+    cmd,
+    args: JSON.stringify(args),
+    duration: duration ? `${duration}ms` : '-',
+    cached,
+    err
+  }
+  _requestLogs.push(log)
+  if (_requestLogs.length > MAX_LOGS) {
+    _requestLogs.shift()
+  }
+}
+
+// 导出日志供调试页面使用
+export function getRequestLogs() {
+  return _requestLogs.slice()
+}
+
+export function clearRequestLogs() {
+  _requestLogs.length = 0
+}
+
+function cachedInvoke(cmd, args = {}, ttl = CACHE_TTL) {
+  const key = cmd + JSON.stringify(args)
+  const cached = _cache.get(key)
+  if (cached && Date.now() - cached.ts < ttl) {
+    logRequest(cmd, args, 0, true)
+    return Promise.resolve(cached.val)
+  }
+  // in-flight 去重：同一个 key 的请求正在执行中，复用同一个 Promise
+  // 避免缓存过期瞬间多个调用者同时 spawn 进程（ARM 设备上的 CPU 爆满根因）
+  if (_inflight.has(key)) {
+    return _inflight.get(key)
+  }
+  const p = invoke(cmd, args, ttl).then(val => {
+    // invalidate() may run while this request is still in flight. In that case
+    // the response was started against stale state, so it must not repopulate
+    // the cache after the write-side invalidation has already completed.
+    if (_inflight.get(key) === p) {
+      _cache.set(key, { val, ts: Date.now() })
+      _inflight.delete(key)
+    }
+    return val
+  }).catch(err => {
+    if (_inflight.get(key) === p) _inflight.delete(key)
+    throw err
+  })
+  _inflight.set(key, p)
+  return p
+}
+
+// 清除指定命令的缓存（写操作后调用）
+function invalidate(...cmds) {
+  if (!cmds.length) {
+    _cache.clear()
+    _inflight.clear()
+    return
+  }
+  for (const [k] of _cache) {
+    if (cmds.some(c => k.startsWith(c))) _cache.delete(k)
+  }
+  for (const [k] of _inflight) {
+    if (cmds.some(c => k.startsWith(c))) _inflight.delete(k)
+  }
+}
+
+// 导出 invalidate 供外部使用
+export { invalidate }
+
+export async function invoke(cmd, args = {}, extraTimeout = 0) {
+  const start = Date.now()
+  const tauriInvoke = WEB_ONLY_CMDS.has(cmd) ? null : await getTauriInvoke()
+
+  const baseTimeout = 300000 // 5min default for long-running UI actions
+  const cmdTimeout = extraTimeout || baseTimeout
+  const timeoutMs = Math.max(1000, cmdTimeout)
+
+  let timeoutId = null
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`invoke timeout: ${cmd} (${timeoutMs}ms)`)), timeoutMs)
+  })
+
+  try {
+    let result
+    if (tauriInvoke) {
+      result = await Promise.race([tauriInvoke(cmd, args), timeoutPromise])
+    } else {
+      result = await Promise.race([webInvoke(cmd, args), timeoutPromise])
+    }
+    clearTimeout(timeoutId)
+    const duration = Date.now() - start
+    logRequest(cmd, args, duration, false)
+    return result
+  } catch (e) {
+    clearTimeout(timeoutId)
+    const duration = Date.now() - start
+    logRequest(cmd, args, duration, false, String(e))
+    throw e
+  }
+}
+
+// Web 模式：通过 Vite 开发服务器的 API 端点调用真实后端
+async function webInvoke(cmd, args) {
+  const resp = await fetch(`/__api/${cmd}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  })
+  if (resp.status === 401) {
+    // Tauri 模式下不触发登录浮层（Tauri 有自己的认证流程）
+    if (!isTauriRuntime() && window.__星枢OpenClaw_show_login) window.__星枢OpenClaw_show_login()
+    throw new Error(t('common.loginRequired'))
+  }
+  // 检测后端是否可用：如果返回的是 HTML（非 JSON），说明后端未运行
+  const ct = (resp.headers.get('content-type') || '').toLowerCase()
+  if (ct.includes('text/html') || ct.includes('text/plain')) {
+    throw new Error(t('common.backendWebModeRequired'))
+  }
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
+    throw new Error(data.error || `HTTP ${resp.status}`)
+  }
+  return resp.json()
+}
+
+// 后端连接状态
+let _backendOnline = null // null=未检测, true=在线, false=离线
+const _backendListeners = []
+
+export function onBackendStatusChange(fn) {
+  _backendListeners.push(fn)
+  return () => { const i = _backendListeners.indexOf(fn); if (i >= 0) _backendListeners.splice(i, 1) }
+}
+
+export function isBackendOnline() { return _backendOnline }
+
+function _setBackendOnline(v) {
+  if (_backendOnline !== v) {
+    _backendOnline = v
+    _backendListeners.forEach(fn => { try { fn(v) } catch {} })
+  }
+}
+
+// 后端健康检查
+export async function checkBackendHealth() {
+  if (isTauriRuntime()) { _setBackendOnline(true); return true }
+  try {
+    const resp = await fetch('/__api/health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const ok = resp.ok
+    _setBackendOnline(ok)
+    return ok
+  } catch {
+    _setBackendOnline(false)
+    return false
+  }
+}
+
+const GATEWAY_CACHE_KEYS = ['read_openclaw_config', 'get_services_status', 'get_status_summary']
+const INSTALLATION_CACHE_KEYS = ['check_installation', 'get_deploy_config', 'list_backups']
+
+function invalidateGatewayCaches() {
+  invalidate(...GATEWAY_CACHE_KEYS)
+}
+
+function invalidateInstallationCaches() {
+  invalidate(...INSTALLATION_CACHE_KEYS)
+  invalidateGatewayCaches()
+}
+
+// 配置保存后防抖重载 Gateway（3 秒内多次写入只触发一次重载）
+let _reloadTimer = null
+function _debouncedReloadGateway() {
+  clearTimeout(_reloadTimer)
+  _reloadTimer = setTimeout(() => {
+    invalidateGatewayCaches()
+    invoke('reload_gateway')
+      .then(() => invalidateGatewayCaches())
+      .catch(() => {})
+  }, 3000)
+}
+
+const _remoteModelCache = new Map()
+const REMOTE_MODEL_CACHE_TTL = 10 * 60 * 1000
+
+async function cachedRemoteModels(baseUrl, apiKey, apiType = null) {
+  const key = JSON.stringify({ baseUrl: String(baseUrl || '').replace(/\/$/, ''), apiKey: apiKey || '', apiType: apiType || null })
+  const now = Date.now()
+  const hit = _remoteModelCache.get(key)
+  if (hit && hit.expires > now) return hit.promise
+
+  const promise = invoke('list_remote_models', { baseUrl, apiKey, apiType })
+    .catch(err => {
+      _remoteModelCache.delete(key)
+      throw err
+    })
+  _remoteModelCache.set(key, { expires: now + REMOTE_MODEL_CACHE_TTL, promise })
+  return promise
+}
+
+const CONFIG_CHANGED_EVENT = 'openclaw-config-changed'
+
+function notifyConfigChanged(detail = {}) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(CONFIG_CHANGED_EVENT, { detail }))
+}
+
+function invalidateRemoteModelCaches() {
+  _remoteModelCache.clear()
+}
+
+// 导出 API
+export const api = {
+  // 服务管理（状态用短缓存，操作不缓存）
+  getServicesStatus: () => cachedInvoke('get_services_status', {}, 30000),
+  startService: (label) => { invalidateGatewayCaches(); return invoke('start_service', { label }, 300000).then(r => { invalidateGatewayCaches(); return r }) },
+  stopService: (label) => { invalidateGatewayCaches(); return invoke('stop_service', { label }, 60000).then(r => { invalidateGatewayCaches(); return r }) },
+  restartService: (label) => { invalidateGatewayCaches(); return invoke('restart_service', { label }, 300000).then(r => { invalidateGatewayCaches(); return r }) },
+  claimGateway: () => { invalidateGatewayCaches(); return invoke('claim_gateway').then(r => { invalidateGatewayCaches(); return r }) },
+  guardianStatus: () => invoke('guardian_status'),
+
+  // 版本信息：本地部分走 Rust，远程（latest）走 JS fetch（绕过 Rust 网络限制）
+  getVersionInfo: () => getVersionInfoViaJs(),
+  getStatusSummary: () => cachedInvoke('get_status_summary', {}, 60000),
+  readOpenclawConfig: () => cachedInvoke('read_openclaw_config'),
+  getBundledRuntimeStatus: () => invoke('get_bundled_runtime_status'),
+  deployBundledNode: () => { invalidateInstallationCaches(); return invoke('deploy_bundled_node', {}, 300000).then(r => { invalidateInstallationCaches(); return r }) },
+  deployBundledGit: () => { invalidateInstallationCaches(); return invoke('deploy_bundled_git', {}, 300000).then(r => { invalidateInstallationCaches(); return r }) },
+  deployBundledRuntime: () => { invalidateInstallationCaches(); return invoke('deploy_bundled_runtime', {}, 300000).then(r => { invalidateInstallationCaches(); return r }) },
+  calibrateOpenclawConfig: (mode = 'inherit') => { invalidateInstallationCaches(); return invoke('calibrate_openclaw_config', { mode }).then(r => { invalidateInstallationCaches(); _debouncedReloadGateway(); return r }) },
+  writeOpenclawConfig: (config, options = {}) => {
+    invalidateGatewayCaches()
+    return invoke('write_openclaw_config', { config }).then(r => {
+      invalidateGatewayCaches()
+      if (options?.reload !== false) _debouncedReloadGateway()
+      invalidateRemoteModelCaches()
+      notifyConfigChanged({ source: 'writeOpenclawConfig', configChangedAt: Date.now(), modelsChanged: true })
+      return r
+    })
+  },
+  readMcpConfig: () => cachedInvoke('read_mcp_config'),
+  writeMcpConfig: (config) => { invalidate('read_mcp_config'); return invoke('write_mcp_config', { config }) },
+  reloadGateway: () => { invalidateGatewayCaches(); return invoke('reload_gateway').then(r => { invalidateGatewayCaches(); return r }) },
+  restartGateway: () => { invalidateGatewayCaches(); return invoke('restart_gateway', {}, 60000).then(r => { invalidateGatewayCaches(); return r }) },
+  doctorCheck: () => invoke('doctor_check'),
+  doctorFix: () => {
+    invalidateGatewayCaches()
+    return invoke('doctor_fix').then(r => {
+      invalidateGatewayCaches()
+      return r
+    })
+  },
+  listOpenclawVersions: async (source = 'chinese') => fetchNpmAllVersions(source),
+  upgradeOpenclaw: (source = 'chinese', version = null, method = 'auto') => { invalidateInstallationCaches(); return invoke('upgrade_openclaw', { source, version, method }, 300000).then(r => { invalidateInstallationCaches(); return r }) },
+  uninstallOpenclaw: (cleanConfig = false) => { invalidateInstallationCaches(); return invoke('uninstall_openclaw', { cleanConfig }, 60000).then(r => { invalidateInstallationCaches(); return r }) },
+  installGateway: () => { invalidateInstallationCaches(); return invoke('install_gateway', {}, 300000).then(r => { invalidateInstallationCaches(); return r }) },
+  uninstallGateway: () => { invalidateInstallationCaches(); return invoke('uninstall_gateway', {}, 60000).then(r => { invalidateInstallationCaches(); return r }) },
+  openLobsterOffice: () => invoke('open_lobster_office'),
+  openGlobalBuiltinWindow: (url = null) => invoke('open_global_builtin_window', { url: url || null }),
+  openXingshuChatWindow: () => invoke('open_xingshu_chat_window'),
+  openXingshuSkillCenterWindow: () => invoke('open_xingshu_skill_center_window'),
+  openXingshuSkillSecurityWindow: () => invoke('open_xingshu_skill_security_window'),
+  fetchLiveSources: (url) => invoke('fetch_live_sources', { url }, 30000),
+  openLivePlayer: (sources) => invoke('open_live_player', { sources }),
+  fetchPageM3u8: (url) => api.fetchLiveSources(url),
+  updateOfficeState: (state, detail) => invoke('update_office_state', { state, detail }),
+  syncOpenclawToOffice: () => invoke('sync_openclaw_to_office'),
+  getNpmRegistry: () => cachedInvoke('get_npm_registry', {}, 30000),
+  setNpmRegistry: (registry) => { invalidate('get_npm_registry'); return invoke('set_npm_registry', { registry }) },
+  saveStandaloneInstallDir: async (installDir) => {
+    const cfg = await api.readPanelConfig()
+    const value = String(installDir || '').trim()
+    if (value) {
+      cfg.openclawStandaloneInstallDir = value
+      cfg.openclawDir = value
+    } else {
+      delete cfg.openclawStandaloneInstallDir
+    }
+    return api.writePanelConfig(cfg)
+  },
+  testModel: (baseUrl, apiKey, modelId, apiType = null) => invoke('test_model', { baseUrl, apiKey, modelId, apiType }),
+  assistantApiRequest: (baseUrl, apiKey, apiType, path, body) => invoke('assistant_api_request', { baseUrl, apiKey, apiType: apiType || null, path, body }, 130000),
+  assistantChatOnce: (baseUrl, apiKey, modelId, apiType, messages, temperature = 0.7) => invoke('assistant_chat_once', { baseUrl, apiKey, modelId, apiType: apiType || null, messages, temperature }, 130000),
+  translateText: (text, model = null) => invoke('translate_text', { text, model }, 90000),
+  listRemoteModels: (baseUrl, apiKey, apiType = null, options = {}) => options?.fresh ? invoke('list_remote_models', { baseUrl, apiKey, apiType }) : cachedRemoteModels(baseUrl, apiKey, apiType),
+  clearRemoteModelCache: () => invalidateRemoteModelCaches(),
+
+  // Agent 管理
+  listAgents: () => cachedInvoke('list_agents'),
+  getAgentDetail: (id) => cachedInvoke('get_agent_detail', { id }, 5000),
+  listAgentFiles: (id) => cachedInvoke('list_agent_files', { id }, 5000),
+  readAgentFile: (id, name) => invoke('read_agent_file', { id, name }),
+  writeAgentFile: (id, name, content) => { invalidate('list_agent_files', 'read_agent_file'); return invoke('write_agent_file', { id, name, content }) },
+  getAgentWorkspaceInfo: (id) => cachedInvoke('get_agent_workspace_info', { id }, 5000),
+  listAgentWorkspaceEntries: (id, relativePath) => cachedInvoke('list_agent_workspace_entries', { id, relativePath: relativePath || null }, 5000),
+  readAgentWorkspaceFile: (id, relativePath) => cachedInvoke('read_agent_workspace_file', { id, relativePath }, 5000),
+  writeAgentWorkspaceFile: (id, relativePath, content) => {
+    invalidate('get_agent_workspace_info', 'list_agent_workspace_entries', 'read_agent_workspace_file', 'list_agent_files', 'read_agent_file')
+    return invoke('write_agent_workspace_file', { id, relativePath, content })
+  },
+  updateAgentConfig: (id, config) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_config', { id, config }) },
+  addAgent: (name, model, workspace) => { invalidate('list_agents'); return invoke('add_agent', { name, model, workspace: workspace || null }) },
+  deleteAgent: (id) => { invalidate('list_agents', 'get_agent_detail'); return invoke('delete_agent', { id }) },
+  updateAgentIdentity: (id, name, emoji) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_identity', { id, name, emoji }) },
+  updateAgentModel: (id, model) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_model', { id, model }) },
+  importAgentWorkspace: (targetId, sourceId) => { invalidate('list_agents', 'get_agent_detail', 'get_agent_workspace_info', 'list_agent_workspace_entries'); return invoke('import_agent_workspace', { targetId, sourceId }) },
+  backupAgent: (id) => invoke('backup_agent', { id }),
+  agencyAgentsList: () => cachedInvoke('agency_agents_list', {}, 5000),
+  agencyAgentDetail: (id) => invoke('agency_agent_detail', { id }),
+  agencyAgentInstall: (id, overwrite = false) => { invalidate('agency_agents_list', 'list_agents', 'get_agent_detail'); return invoke('agency_agent_install', { id, overwrite }) },
+  agencyAgentsInstallBulk: (division = null, overwrite = false) => { invalidate('agency_agents_list', 'list_agents', 'get_agent_detail'); return invoke('agency_agents_install_bulk', { division, overwrite }) },
+
+  // OpenMontage 外部视频工厂（AGPL 外部连接器）
+  openmontageStatus: () => cachedInvoke('openmontage_status', {}, 5000),
+  openmontagePrepareRuntime: () => { invalidate('openmontage_status'); return invoke('openmontage_prepare_runtime', {}, 600000) },
+  openmontageInstall: (update = false, installDeps = true) => { invalidate('openmontage_status'); return invoke('openmontage_install', { update, installDeps }, 600000) },
+  openmontageOpenStudio: () => invoke('openmontage_open_studio'),
+  openmontageOpenFolder: () => invoke('openmontage_open_folder'),
+
+  // CLI-Anything 工具中心（外部连接器 + 安全安装器）
+  cliAnythingStatus: () => cachedInvoke('cli_anything_status', {}, 8000),
+  cliAnythingInstall: () => { invalidate('cli_anything_status', 'cli_anything_catalog'); return invoke('cli_anything_install', {}, 600000) },
+  cliAnythingCatalog: (query = '') => cachedInvoke('cli_anything_catalog', { query: query || null }, 180000),
+  cliAnythingInstallTool: (name) => { invalidate('cli_anything_status', 'cli_anything_catalog'); return invoke('cli_anything_install_tool', { name }, 600000) },
+  cliAnythingUninstallTool: (name) => { invalidate('cli_anything_status', 'cli_anything_catalog'); return invoke('cli_anything_uninstall_tool', { name }, 300000) },
+  cliAnythingMatrixPreflight: (name) => invoke('cli_anything_matrix_preflight', { name }, 120000),
+
+  // 日志（短缓存）
+  readLogTail: (logName, lines = 100) => cachedInvoke('read_log_tail', { logName, lines }, 5000),
+  searchLog: (logName, query, maxResults = 50) => invoke('search_log', { logName, query, maxResults }),
+
+  // 记忆文件
+  listMemoryFiles: (category, agentId) => cachedInvoke('list_memory_files', { category, agentId: agentId || null }),
+  readMemoryFile: (path, agentId) => cachedInvoke('read_memory_file', { path, agentId: agentId || null }, 5000),
+  writeMemoryFile: (path, content, category, agentId) => { invalidate('list_memory_files', 'read_memory_file'); return invoke('write_memory_file', { path, content, category: category || 'memory', agentId: agentId || null }) },
+  deleteMemoryFile: (path, agentId) => { invalidate('list_memory_files', 'read_memory_file'); return invoke('delete_memory_file', { path, agentId: agentId || null }) },
+  exportMemoryZip: (category, agentId) => invoke('export_memory_zip', { category, agentId: agentId || null }),
+
+  // 消息渠道管理
+  readPlatformConfig: (platform, accountId) => invoke('read_platform_config', { platform, accountId: accountId || null }),
+  saveMessagingPlatform: (platform, form, accountId, agentId) => { invalidate('list_configured_platforms', 'read_openclaw_config', 'read_platform_config'); return invoke('save_messaging_platform', { platform, form, accountId: accountId || null, agentId: agentId || null }) },
+  removeMessagingPlatform: (platform, accountId) => { invalidate('list_configured_platforms', 'read_openclaw_config', 'read_platform_config'); return invoke('remove_messaging_platform', { platform, accountId: accountId || null }) },
+  toggleMessagingPlatform: (platform, enabled) => { invalidate('list_configured_platforms', 'read_openclaw_config', 'read_platform_config'); return invoke('toggle_messaging_platform', { platform, enabled }) },
+  verifyBotToken: (platform, form) => invoke('verify_bot_token', { platform, form }),
+  diagnoseChannel: (platform, accountId) => invoke('diagnose_channel', { platform, accountId: accountId || null }),
+  repairQqbotChannelSetup: () => {
+    invalidate('list_configured_platforms', 'read_openclaw_config', 'read_platform_config')
+    return invoke('repair_qqbot_channel_setup')
+  },
+  listConfiguredPlatforms: () => cachedInvoke('list_configured_platforms', {}, 5000),
+  getChannelPluginStatus: (pluginId) => invoke('get_channel_plugin_status', { pluginId }),
+  installQqbotPlugin: (version = null) => invoke('install_qqbot_plugin', { version }),
+  installChannelPlugin: (packageName, pluginId, version = null) => invoke('install_channel_plugin', { packageName, pluginId, version }),
+  runChannelAction: (platform, action, version = null) => invoke('run_channel_action', { platform, action, version }),
+  checkWeixinPluginStatus: () => invoke('check_weixin_plugin_status'),
+
+  // Agent 渠道绑定管理
+  getAgentBindings: (agentId) => invoke('get_agent_bindings', { agentId }),
+  listAllBindings: () => invoke('list_all_bindings'),
+  saveAgentBinding: (agentId, channel, accountId, bindingConfig) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('save_agent_binding', { agentId, channel, accountId: accountId || null, bindingConfig: bindingConfig || {} }) },
+  deleteAgentBinding: (agentId, channel, accountId, bindingConfig) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('delete_agent_binding', { agentId, channel, accountId: accountId || null, bindingConfig: bindingConfig || null }) },
+  deleteAgentAllBindings: (agentId) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('delete_agent_all_bindings', { agentId }) },
+
+  // 面板配置 (星枢OpenClaw.json)
+  getOpenclawDir: () => invoke('get_openclaw_dir'),
+  relaunchApp: () => invoke('relaunch_app'),
+  readPanelConfig: () => invoke('read_panel_config'),
+  writePanelConfig: (config) => { invalidate(); return invoke('write_panel_config', { config }).then(r => { invoke('invalidate_path_cache').catch(() => {}); return r }) },
+  testProxy: (proxyUrl) => invoke('test_proxy', { proxyUrl: proxyUrl || null }),
+
+  // 安装/部署
+  checkInstallation: () => cachedInvoke('check_installation', {}, 60000),
+  initOpenclawConfig: () => { invalidate('check_installation'); return invoke('init_openclaw_config') },
+  checkNode: () => cachedInvoke('check_node', {}, 60000),
+  checkNodeAtPath: (nodeDir) => invoke('check_node_at_path', { nodeDir }),
+  checkOpenclawAtPath: (cliPath) => invoke('check_openclaw_at_path', { cliPath }),
+  scanNodePaths: () => invoke('scan_node_paths'),
+  autoInstallNode: () => invoke('auto_install_node'),
+  scanOpenclawPaths: () => invoke('scan_openclaw_paths'),
+  saveCustomNodePath: (nodeDir) => invoke('save_custom_node_path', { nodeDir }).then(r => { invalidate('check_node', 'get_services_status', 'get_status_summary'); invoke('invalidate_path_cache').catch(() => {}); return r }),
+  invalidatePathCache: () => invoke('invalidate_path_cache'),
+  clearUsageCostCache: () => invoke('clear_usage_cost_cache'),
+  checkGit: () => cachedInvoke('check_git', {}, 60000),
+  scanGitPaths: () => invoke('scan_git_paths'),
+  autoInstallGit: () => invoke('auto_install_git'),
+  configureGitHttps: () => invoke('configure_git_https'),
+  getDeployConfig: () => cachedInvoke('get_deploy_config'),
+  patchModelVision: () => invoke('patch_model_vision'),
+  checkPanelUpdate: () => invoke('check_panel_update'),
+  writeEnvFile: (path, config) => invoke('write_env_file', { path, config }),
+
+  // 备份管理
+  listBackups: () => cachedInvoke('list_backups'),
+  createBackup: () => { invalidate('list_backups'); return invoke('create_backup') },
+  restoreBackup: (name) => { invalidate(); return invoke('restore_backup', { name }) },
+  deleteBackup: (name) => { invalidate('list_backups'); return invoke('delete_backup', { name }) },
+
+  // 设备密钥 + Gateway 握手
+  createConnectFrame: (nonce, gatewayToken) => invoke('create_connect_frame', { nonce, gatewayToken }),
+  deviceInfo: () => invoke('device_info'),
+
+  // 设备配对
+  autoPairDevice: () => invoke('auto_pair_device'),
+  checkPairingStatus: () => invoke('check_pairing_status'),
+  pairingListChannel: (channel) => invoke('pairing_list_channel', { channel }),
+  pairingApproveChannel: (channel, code, notify = false) => invoke('pairing_approve_channel', { channel, code, notify }),
+
+  // AI 助手工具
+  assistantExec: (command, cwd) => invoke('assistant_exec', { command, cwd: cwd || null }),
+  assistantReadFile: (path) => invoke('assistant_read_file', { path }),
+  assistantWriteFile: (path, content) => invoke('assistant_write_file', { path, content }),
+  assistantListDir: (path) => invoke('assistant_list_dir', { path }),
+  assistantSystemInfo: () => invoke('assistant_system_info'),
+  assistantListProcesses: (filter) => invoke('assistant_list_processes', { filter: filter || null }),
+  assistantCheckPort: (port) => invoke('assistant_check_port', { port }),
+  assistantWebSearch: (query, maxResults) => invoke('assistant_web_search', { query, max_results: maxResults || 5 }),
+  assistantFetchUrl: (url) => invoke('assistant_fetch_url', { url }),
+
+  // Skills 管理
+  skillsList: () => invoke('skills_list'),
+  skillsInfo: (name) => invoke('skills_info', { name }),
+  skillsCheck: () => invoke('skills_check'),
+  skillsInstallDep: (kind, spec) => invoke('skills_install_dep', { kind, spec }),
+  skillsUninstall: (name) => invoke('skills_uninstall', { name }),
+  // SkillHub SDK（内置 HTTP，不依赖 CLI）
+  skillhubSearch: (query, limit) => invoke('skillhub_search', { query, limit }),
+  skillhubIndex: () => invoke('skillhub_index'),
+  skillhubInstall: (slug) => invoke('skillhub_install', { slug }),
+  xingshuSkillInstall: (slug) => invoke('xingshu_skill_install', { slug }),
+  skillsScanDiagnostics: () => invoke('skills_scan_diagnostics'),
+  hermesSkillhubInstall: (slug) => invoke('hermes_skillhub_install', { slug }),
+
+  // 实例管理
+  instanceList: () => cachedInvoke('instance_list', {}, 30000),
+  instanceAdd: (instance) => { invalidate('instance_list'); return invoke('instance_add', instance) },
+  instanceRemove: (id) => { invalidate('instance_list'); return invoke('instance_remove', { id }) },
+  instanceSetActive: (id) => { invalidate('instance_list'); _cache.clear(); return invoke('instance_set_active', { id }) },
+  instanceHealthCheck: (id) => invoke('instance_health_check', { id }),
+  instanceHealthAll: () => invoke('instance_health_all'),
+
+  // Docker 管理（当前由 Web/dev-api 提供）
+  dockerInfo: (nodeId) => invoke('docker_info', { nodeId: nodeId || null }),
+  dockerListContainers: (nodeId, all = true) => invoke('docker_list_containers', { nodeId: nodeId || null, all }),
+  dockerCreateContainer: (payload) => invoke('docker_create_container', payload || {}),
+  dockerStartContainer: (nodeId, containerId) => invoke('docker_start_container', { nodeId: nodeId || null, containerId }),
+  dockerStopContainer: (nodeId, containerId) => invoke('docker_stop_container', { nodeId: nodeId || null, containerId }),
+  dockerRestartContainer: (nodeId, containerId) => invoke('docker_restart_container', { nodeId: nodeId || null, containerId }),
+  dockerRemoveContainer: (nodeId, containerId, force = false) => invoke('docker_remove_container', { nodeId: nodeId || null, containerId, force }),
+  dockerPullImage: (payload) => invoke('docker_pull_image', payload || {}),
+  dockerPullStatus: (requestId) => invoke('docker_pull_status', { requestId }),
+  dockerListImages: (nodeId) => invoke('docker_list_images', { nodeId: nodeId || null }),
+  dockerListNodes: () => invoke('docker_list_nodes', {}),
+  dockerAddNode: (name, endpoint) => invoke('docker_add_node', { name, endpoint }),
+  dockerRemoveNode: (nodeId) => invoke('docker_remove_node', { nodeId }),
+  dockerClusterOverview: () => invoke('docker_cluster_overview', {}),
+
+
+  // 扩展工具：cftunnel + ClawApp
+  getCftunnelStatus: () => cachedInvoke('get_cftunnel_status', {}, 5000),
+  cftunnelAction: (action) => {
+    invalidate('get_cftunnel_status', 'get_cftunnel_logs')
+    return invoke('cftunnel_action', { action }, 60000)
+  },
+  getCftunnelLogs: (lines = 30) => cachedInvoke('get_cftunnel_logs', { lines }, 5000),
+  installCftunnel: () => {
+    invalidate('get_cftunnel_status', 'get_cftunnel_logs')
+    return invoke('install_cftunnel', {}, 300000)
+  },
+  getClawappStatus: () => cachedInvoke('get_clawapp_status', {}, 5000),
+  installClawapp: () => {
+    invalidate('get_clawapp_status')
+    return invoke('install_clawapp', {}, 300000)
+  },
+
+  // 前端热更新 + 全量客户端更新
+  checkFrontendUpdate: () => invoke('check_frontend_update'),
+  downloadFrontendUpdate: (url, expectedHash) => invoke('download_frontend_update', { url, expectedHash: expectedHash || '' }),
+  checkFullAppUpdate: () => invoke('check_full_app_update'),
+  downloadFullAppUpdate: (url, expectedHash, filename) => invoke('download_full_app_update', { url, expectedHash: expectedHash || '', filename: filename || null }),
+  rollbackFrontendUpdate: () => invoke('rollback_frontend_update'),
+  getUpdateStatus: () => invoke('get_update_status'),
+  openDesktopZip: async (path) => {
+    if (!path) return false
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(path)
+    return true
+  },
+
+  // 数据目录 & 图片存储
+  ensureDataDir: () => invoke('assistant_ensure_data_dir'),
+  saveImage: (id, data) => invoke('assistant_save_image', { id, data }),
+  loadImage: (id) => invoke('assistant_load_image', { id }),
+  loadMediaFile: (path) => invoke('assistant_load_media_file', { path }, 60000),
+  openContainingFolder: (path) => invoke('assistant_open_containing_folder', { path }),
+  deleteImage: (id) => invoke('assistant_delete_image', { id }),
+
+  // Hermes Agent 管理
+  checkHermes: () => cachedInvoke('check_hermes', {}, 30000),
+  checkHermesUpdate: () => invoke('check_hermes_update'),
+  checkPython: () => cachedInvoke('check_python', {}, 60000),
+  installHermes: (method = 'uv-tool', extras = []) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('install_hermes', { method, extras }, 300000)
+  },
+  configureHermes: (provider, apiKey, model, baseUrl) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('configure_hermes', { provider, apiKey, model: model || null, baseUrl: baseUrl || null })
+  },
+  hermesGatewayAction: async (action) => {
+    invalidate('check_hermes')
+    try {
+      if (action === 'restart') {
+        try { await invoke('hermes_gateway_action', { action: 'stop' }, 15000) } catch (_) {}
+        await new Promise(r => setTimeout(r, 800))
+        return await invoke('hermes_gateway_action', { action: 'start' }, 60000)
+      }
+      return await invoke('hermes_gateway_action', { action }, action === 'start' ? 60000 : 15000)
+    } finally {
+      invalidate('check_hermes')
+    }
+  },
+  hermesHealthCheck: () => invoke('hermes_health_check'),
+  hermesApiProxy: (method, path, body, headers) => invoke('hermes_api_proxy', { method, path, body: body || null, headers: headers || null }),
+  musicSearch: (q) => invoke('music_search', { query: q }),
+  musicSearchNetease: (q, limit) => api.musicSearchAll(q, ['netease'], limit),
+  hermesAgentRun: (input, sessionId, conversationHistory, instructions) => invoke('hermes_agent_run', { input, sessionId: sessionId || null, conversationHistory: conversationHistory || null, instructions: instructions || null }, 330000),
+  hermesProfilesList: () => invoke('hermes_profiles_list', {}).catch(() => ({ profiles: [], active: 'default' })),
+  hermesProfileUse: (name) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('hermes_profile_use', { name }).catch(() => true).finally(() => invalidate('check_hermes', 'hermes_list_providers'))
+  },
+  hermesReadConfig: () => invoke('hermes_read_config'),
+  hermesConfigRawRead: () => invoke('hermes_config_raw_read'),
+  hermesConfigRawWrite: (yaml) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('hermes_config_raw_write', { yaml })
+  },
+  hermesFetchModels: (baseUrl, apiKey, apiType, provider) => invoke('hermes_fetch_models', { baseUrl, apiKey, apiType: apiType || null, provider: provider || null }),
+  hermesListProviders: () => cachedInvoke('hermes_list_providers', {}, 30000),
+  hermesUpdateModel: (model) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('hermes_update_model', { model }).finally(() => invalidate('check_hermes', 'hermes_list_providers'))
+  },
+  hermesDetectEnvironments: () => invoke('hermes_detect_environments'),
+  hermesSetGatewayUrl: (url) => {
+    invalidate('check_hermes')
+    return invoke('hermes_set_gateway_url', { url: url || null }).finally(() => invalidate('check_hermes'))
+  },
+  hermesEnvReadUnmanaged: () => invoke('hermes_env_read_unmanaged'),
+  hermesEnvSet: (key, value) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('hermes_env_set', { key, value })
+  },
+  hermesEnvDelete: (key) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('hermes_env_delete', { key })
+  },
+  hermesEnvReveal: () => invoke('hermes_env_reveal'),
+  updateHermes: (target = 'latest') => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('update_hermes', { target })
+  },
+  uninstallHermes: (cleanConfig = false) => {
+    invalidate('check_hermes', 'hermes_list_providers')
+    return invoke('uninstall_hermes', { cleanConfig })
+  },
+
+  // Hermes Sessions / Logs / Skills / Memory
+  hermesSessionsList: (source, limit, profile) => invoke('hermes_sessions_list', { source: source || null, limit: limit || null, profile: profile || null }),
+  hermesSessionsSummaryList: (source, limit, profile) => invoke('hermes_sessions_summary_list', { source: source || null, limit: limit || null, profile: profile || null }),
+  hermesSessionDetail: (sessionId, profile) => invoke('hermes_session_detail', { sessionId, profile: profile || null }),
+  hermesSessionDelete: (sessionId) => invoke('hermes_session_delete', { sessionId }),
+  hermesSessionRename: (sessionId, title) => invoke('hermes_session_rename', { sessionId, title }),
+  hermesLogsList: () => invoke('hermes_logs_list'),
+  hermesLogsRead: (name, lines, level) => invoke('hermes_logs_read', { name, lines: lines || 200, level: level || null }),
+  hermesLogsDownload: (name) => invoke('hermes_logs_download', { name }),
+  hermesSkillsList: () => invoke('hermes_skills_list'),
+  hermesSkillDetail: (filePath) => invoke('hermes_skill_detail', { filePath }),
+  hermesSkillFiles: (category, skillName) => invoke('hermes_skill_files', { category, skillName }),
+  hermesSkillToggle: (slug, enabled) => invoke('hermes_skill_toggle', { slug, enabled }),
+  hermesToolsetsList: () => invoke('hermes_toolsets_list'),
+  hermesSkillSave: (name, content) => invoke('hermes_skill_write', { filePath: name, content }),
+  hermesSkillDelete: async () => { throw new Error('Hermes skill delete is not supported by the backend') },
+  hermesMemoryRead: (type) => invoke('hermes_memory_read', { type: type || 'memory' }),
+  hermesMemoryReadAll: () => invoke('hermes_memory_read_all'),
+  hermesMemoryWrite: (type, content) => invoke('hermes_memory_write', { type: type || 'memory', content }),
+  hermesCronJobsList: () => invoke('hermes_cron_jobs_list'),
+  hermesDashboardProbe: () => invoke('hermes_dashboard_probe'),
+  hermesDashboardStart: () => invoke('hermes_dashboard_start'),
+  hermesDashboardThemes: () => invoke('hermes_dashboard_themes'),
+  hermesDashboardThemeSet: (name) => invoke('hermes_dashboard_theme_set', { name }),
+  hermesDashboardPlugins: () => invoke('hermes_dashboard_plugins'),
+  hermesDashboardPluginsRescan: () => invoke('hermes_dashboard_plugins_rescan'),
+  hermesUsageAnalytics: (days = 30) => invoke('hermes_usage_analytics', { days }),
+
+  proxyUrl: (url, cookie) => invoke('proxy_url', { url, cookie: cookie || null }),
+  weiyanApiPost: (action, body) => invoke('weiyan_api_post', { action, body }, 20000),
+
+  // 音乐播放器
+  musicSearchAll: (query, platforms, limit) => invoke('music_search_all', { query, platforms: platforms || null, limit: limit || 20 }),
+  musicGetPlayUrl: (platform, id) => invoke('music_get_play_url', { platform, id }),
+  musicProxyAudio: (url, platform) => invoke('music_proxy_audio', { url, platform }),
+  musicDownloadSong: (platform, id, name, artist) => invoke('music_download_song', { platform, id, name, artist }),
+  musicSetDownloadDir: (path) => invoke('music_set_download_dir', { path }),
+  musicGetDownloadDir: () => invoke('music_get_download_dir'),
+  musicGetLyrics: (platform, id) => invoke('music_get_lyrics', { platform, id }),
+}

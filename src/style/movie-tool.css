@@ -1,0 +1,2166 @@
+/* ============================================
+   星枢影视 · 企业版 - HarmonyOS Design 风格
+   2026-07-03 v10 · 华为官方设计语言（深色模式），主色 Huawei Blue #0A59F7
+   ============================================ */
+
+/* ── 重置 & 变量 ── */
+.tvbox-root {
+  /* 日间模式（默认，HarmonyOS Light） */
+  --bg-primary: #f1f3f5;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f5f7fa;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.18);
+  --text-primary: #1a1c1f;
+  --text-secondary: #5f6672;
+  --text-muted: #99a2b3;
+  --accent: #0a59f7;
+  --accent2: #2e6ff2;
+  --accent-gradient: linear-gradient(135deg, #0a59f7 0%, #4d8dff 100%);
+  --glass-bg: rgba(255, 255, 255, 0.92);
+  --glass-border: rgba(0, 0, 0, 0.06);
+  --nav-fade: rgba(241, 243, 245, 0.92);
+  --skeleton-a: #e8ebef;
+  --skeleton-b: #f6f8fa;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --shadow-float: 0 8px 40px rgba(0, 0, 0, 0.16);
+  --font: 'HarmonyOS Sans SC', 'HarmonyOS Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  font-family: var(--font);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+/* 夜间模式（跟随桌面端 data-theme） */
+[data-theme="dark"] .tvbox-root {
+  --bg-primary: #0c0f14;
+  --bg-elevated: #151920;
+  --bg-card: #1b2029;
+  --bg-card-hover: #232935;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --text-primary: #e8ebf0;
+  --text-secondary: #99a2b3;
+  --text-muted: #5c6575;
+  --accent: #317af7;
+  --accent2: #5c97ff;
+  --glass-bg: rgba(18, 22, 30, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --nav-fade: rgba(12, 15, 20, 0.92);
+  --skeleton-a: #1e242e;
+  --skeleton-b: #2a3140;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* ── 顶部导航 ── */
+.tvbox-navbar {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  background: linear-gradient(to bottom, var(--bg-primary) 0%, var(--nav-fade) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tvbox-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.tvbox-brand-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: none;
+}
+
+.tvbox-brand-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
+.tvbox-search-wrap { width: 100%; }
+
+.tvbox-search-box {
+  display: flex;
+  align-items: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 4px 0 14px;
+  gap: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.tvbox-search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(49, 122, 247, 0.15);
+}
+
+.tvbox-search-icon { font-size: 14px; flex-shrink: 0; }
+
+.tvbox-search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 10px 0;
+  min-width: 0;
+}
+
+.tvbox-search-input::placeholder { color: var(--text-muted); }
+
+.tvbox-search-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tvbox-search-btn:hover { background: var(--accent2); }
+
+/* ── 模式切换 ── */
+.tvbox-mode-tabs { display: flex; gap: 6px; }
+
+.tvbox-mode-tab {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.tvbox-mode-tab:hover { border-color: var(--border-hover); color: var(--text-primary); }
+
+.tvbox-mode-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── 分类横条 ── */
+.tvbox-catbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 16px;
+}
+
+.tvbox-catbar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; padding-right: 6px; line-height: 30px; }
+
+.tvbox-cat-chip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  /* 分类名来自不同远程源，宽度按内容自适应，避免长分类被强制压缩成不可读省略号 */
+  flex: 0 1 auto;
+  max-width: min(220px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tvbox-cat-chip:hover { border-color: var(--accent); color: var(--accent2); }
+
+.tvbox-cat-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── 源选择条 ── */
+.tvbox-srcbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tvbox-srcbar::-webkit-scrollbar { display: none; }
+.tvbox-srcbar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; padding-right: 2px; }
+
+.tvbox-src-chip {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tvbox-src-chip:hover { border-color: var(--accent); color: var(--accent2); }
+
+.tvbox-src-chip.active {
+  background: rgba(49, 122, 247, 0.18);
+  border-color: var(--accent);
+  color: var(--accent2);
+  font-weight: 600;
+}
+
+.tvbox-src-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.tvbox-src-chip.active .tvbox-src-dot { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+
+/* ── 主内容区 ── */
+.tvbox-content {
+  flex: 1;
+  padding: 12px 14px 24px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-elevated) transparent;
+}
+
+.tvbox-content::-webkit-scrollbar { width: 4px; }
+.tvbox-content::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 2px; }
+
+/* ── 分隔线 ── */
+.tvbox-divider { height: 1px; background: var(--border); margin: 16px 0; }
+
+/* ── 区域标题 ── */
+.tvbox-section-title { font-size: 14px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.tvbox-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.tvbox-section-heading { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.tvbox-section-heading-dot { width: 4px; height: 16px; border-radius: 2px; background: var(--accent); }
+
+.tvbox-clear-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tvbox-clear-btn:hover { border-color: #e53e3e; color: #fc8181; }
+
+/* ── 视频网格 ── */
+.tvbox-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
+
+.tvbox-card { cursor: pointer; }
+
+.tvbox-card-inner {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.tvbox-card:hover .tvbox-card-inner { border-color: var(--accent); box-shadow: var(--shadow-card); }
+
+.tvbox-card-pic { position: relative; aspect-ratio: 2/3; background: var(--bg-elevated); overflow: hidden; }
+
+.tvbox-card-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s;
+}
+
+.tvbox-card:hover .tvbox-card-pic img { transform: scale(1.05); }
+
+.tvbox-card-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 28px; color: var(--text-muted); }
+
+.tvbox-card-tag {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.92);
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tvbox-card-score {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(251, 191, 36, 0.9);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #1a1a24;
+}
+
+.tvbox-resume-badge {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: rgba(16, 185, 129, 0.92);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.tvbox-card-info { padding: 7px 6px 8px; }
+
+.tvbox-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.tvbox-card-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+/* ── 直播网格 ── */
+.tvbox-cat-section { margin-bottom: 20px; }
+
+.tvbox-cat-heading {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tvbox-cat-heading-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+
+.tvbox-live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; }
+
+.tvbox-live-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.tvbox-live-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(49, 122, 247, 0.2);
+}
+
+.tvbox-live-icon { font-size: 20px; }
+
+.tvbox-live-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* ── 分页 ── */
+.tvbox-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0 4px; }
+
+.tvbox-page-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tvbox-page-btn:hover { border-color: var(--accent); color: var(--accent2); }
+.tvbox-page-info { font-size: 12px; color: var(--text-muted); }
+
+/* ── 加载 ── */
+.tvbox-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; gap: 14px; }
+
+.tvbox-loading-icon {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--bg-elevated);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: tvbox-spin 0.8s linear infinite;
+}
+
+@keyframes tvbox-spin { to { transform: rotate(360deg); } }
+
+.tvbox-loading-text { font-size: 13px; color: var(--text-muted); }
+
+/* ── 空状态 ── */
+.tvbox-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; gap: 10px; }
+.tvbox-empty-icon { font-size: 40px; margin-bottom: 4px; }
+.tvbox-empty-title { font-size: 15px; font-weight: 600; color: var(--text-secondary); }
+.tvbox-empty-sub { font-size: 12px; color: var(--text-muted); text-align: center; }
+
+/* ── 播放器浮层 ── */
+.tvbox-player-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.tvbox-player-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 720px;
+  max-height: 95vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+}
+
+.tvbox-player-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tvbox-player-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.tvbox-player-close {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  margin-left: 10px;
+}
+
+.tvbox-player-mini {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.tvbox-player-mini:hover { background: var(--bg-elevated); color: var(--accent); }
+
+.tvbox-player-close:hover { background: var(--bg-card-hover); border-color: #e53e3e; color: #fc8181; }
+
+.tvbox-player-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-card) transparent;
+}
+
+.tvbox-player-loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 13px; }
+
+.tvbox-player-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.tvbox-open-ext { font-size: 12px; color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+.tvbox-open-ext:hover { color: var(--accent2); }
+
+/* ── 剧集详情页 ── */
+.tvbox-detail-back {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+
+.tvbox-detail-back:hover { border-color: var(--accent); color: var(--accent2); }
+
+.tvbox-detail-info { display: flex; gap: 14px; margin-bottom: 16px; }
+
+.tvbox-detail-pic {
+  width: 100px;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tvbox-detail-meta { flex: 1; min-width: 0; }
+
+.tvbox-detail-name { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; line-height: 1.3; }
+
+.tvbox-detail-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+
+.tvbox-detail-tag {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.tvbox-detail-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── 源选择器 ── */
+.tvbox-source-selector { margin-bottom: 12px; }
+.tvbox-source-selector-label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 6px; }
+.tvbox-source-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.tvbox-source-tab {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tvbox-source-tab:hover { border-color: var(--accent); color: var(--accent2); }
+
+.tvbox-source-tab.active {
+  background: rgba(49, 122, 247, 0.2);
+  border-color: var(--accent);
+  color: var(--accent2);
+  font-weight: 600;
+}
+
+/* ── 剧集网格 ── */
+.tvbox-episodes-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 14px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tvbox-episodes-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+
+.tvbox-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 6px; }
+
+.tvbox-ep-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tvbox-ep-btn:hover { border-color: var(--accent); color: var(--accent2); background: rgba(49, 122, 247, 0.08); }
+
+.tvbox-ep-btn.playing {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: #10b981;
+  color: #34d399;
+  font-weight: 600;
+}
+
+/* ── 播放器 ── */
+.tvbox-video-wrap, .tvbox-iframe-wrap { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--radius-sm); overflow: hidden; }
+.tvbox-video-wrap video, .tvbox-iframe-wrap iframe { width: 100%; height: 100%; border: none; display: block; }
+
+/* ── 悬浮播放器 ── */
+.tvbox-float-wrap {
+  position: fixed;
+  z-index: 99999;
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-float);
+  transition: width 0.2s;
+}
+
+.tvbox-float-wrap.dragging { cursor: grabbing; opacity: 0.9; }
+.tvbox-float-wrap.minimized .tvbox-float-body { display: none; }
+.tvbox-float-wrap.minimized .tvbox-float-url-bar { display: none; }
+
+/* 拖拽调整大小手柄 */
+.tvbox-float-wrap::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.15) 50%);
+  border-radius: 0 0 var(--radius-lg) 0;
+}
+
+.tvbox-float-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  cursor: grab;
+  user-select: none;
+}
+
+.tvbox-float-title { flex: 1; font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+.tvbox-float-ctrl {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.tvbox-float-ctrl:hover { border-color: var(--border-hover); color: var(--text-secondary); }
+.tvbox-float-ctrl.close:hover { border-color: #e53e3e; color: #fc8181; }
+.tvbox-float-ctrl.pin-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.tvbox-float-body { background: #000; }
+.tvbox-float-video-wrap { width: 100%; aspect-ratio: 16/9; background: #000; }
+.tvbox-float-video-wrap video { width: 100%; height: 100%; display: block; }
+
+.tvbox-float-url-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.tvbox-float-url-bar a { flex: 1; font-size: 10px; color: var(--text-muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tvbox-float-url-bar a:hover { color: var(--accent2); }
+
+/* ── 悬浮播放器自定义控制条 ── */
+.float-ctrl-bar {
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  padding: 5px 8px 6px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  user-select: none;
+}
+.float-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.float-time {
+  font-size: 10px;
+  color: rgba(200,200,220,0.8);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  flex-shrink: 0;
+}
+.float-seekbar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+.float-seek-bg { position: absolute; inset: 0; border-radius: 2px; }
+.float-seek-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: var(--accent, #317af7);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.1s;
+}
+.float-seek-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px; height: 10px;
+  background: #fff;
+  border-radius: 50%;
+  left: 0%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.float-seekbar:hover .float-seek-thumb { opacity: 1; }
+.float-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.float-ctrl-btn {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: rgba(220,220,240,0.9);
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  min-width: 28px;
+  text-align: center;
+}
+.float-ctrl-btn:hover { background: rgba(255,255,255,0.18); color: #fff; }
+.float-play-btn { font-size: 13px; min-width: 34px; }
+.float-vol-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+}
+.float-vol-slider {
+  width: 44px;
+  height: 3px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+.float-vol-fill {
+  height: 100%;
+  background: rgba(220,220,240,0.7);
+  border-radius: 2px;
+  width: 100%;
+}
+.tvbox-url-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.tvbox-url-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  width: 90%;
+  max-width: 460px;
+  box-shadow: var(--shadow-float);
+}
+
+.tvbox-url-title { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; }
+
+.tvbox-url-err {
+  display: none;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #fc8181;
+  margin-bottom: 10px;
+}
+
+.tvbox-url-err.show { display: block; }
+.tvbox-url-row { display: flex; gap: 8px; margin-bottom: 10px; }
+
+.tvbox-url-row input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+  min-width: 0;
+}
+
+.tvbox-url-row input:focus { border-color: var(--accent); }
+
+.tvbox-url-go {
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+
+.tvbox-url-go:hover { opacity: 0.88; }
+
+.tvbox-url-hint { font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-bottom: 12px; }
+.tvbox-url-hint span { color: var(--text-secondary); }
+
+.tvbox-url-cancel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s;
+}
+
+.tvbox-url-cancel:hover { border-color: var(--border-hover); color: var(--text-primary); }
+
+
+/* 网站爬虫面板 */
+.tvbox-crawl-panel { padding: 20px; }
+.tvbox-crawl-header { text-align: center; margin-bottom: 24px; }
+.tvbox-crawl-icon { font-size: 48px; margin-bottom: 12px; }
+.tvbox-crawl-title { font-size: 24px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.tvbox-crawl-sub { font-size: 14px; color: var(--text-secondary); }
+.tvbox-crawl-form { display: flex; gap: 10px; margin-bottom: 16px; }
+.tvbox-crawl-form input { flex: 1; padding: 12px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); font-size: 14px; }
+.tvbox-crawl-btn { padding: 12px 24px; background: var(--accent); border: none; border-radius: 8px; color: #fff; font-size: 14px; cursor: pointer; }
+.tvbox-crawl-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.tvbox-crawl-hint { font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 20px; }
+.tvbox-crawl-status { padding: 12px; border-radius: 8px; margin-bottom: 16px; text-align: center; font-size: 13px; display: none; }
+.tvbox-crawl-status-loading { background: rgba(49, 122, 247, 0.2); color: var(--accent2); }
+.tvbox-crawl-status-success { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+.tvbox-crawl-status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+.tvbox-crawl-results { margin-top: 20px; }
+
+/* Wex 配置面板 */
+.tvbox-wex-panel{padding:20px}.tvbox-wex-header{text-align:center;margin-bottom:20px}.tvbox-wex-icon{font-size:40px}.tvbox-wex-title{font-size:22px;font-weight:600}.tvbox-wex-form{display:flex;gap:10px;margin-bottom:16px}.tvbox-wex-form input{flex:1;padding:12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;color:var(--text-primary)}.tvbox-wex-btn{padding:12px 20px;background:var(--accent);border:none;border-radius:8px;color:#fff;cursor:pointer}.tvbox-wex-btn:disabled{opacity:0.6}.tvbox-wex-status{padding:12px;border-radius:8px;margin-bottom:16px;text-align:center;display:none}.tvbox-wex-status-success{background:rgba(16,185,129,0.2);color:#10b981}.tvbox-wex-status-error{background:rgba(239,68,68,0.2);color:#ef4444}
+
+/* 骨架屏 */
+.tvbox-skeleton{background:linear-gradient(90deg,var(--skeleton-a) 25%,var(--skeleton-b) 50%,var(--skeleton-a) 75%);background-size:200% 100%;animation:skeleton-shine 1.4s infinite;border-radius:8px}
+@keyframes skeleton-shine{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.tvbox-skeleton-card{border-radius:8px;height:160px;margin-bottom:8px}
+.tvbox-skeleton-text{height:14px;margin-bottom:8px;border-radius:4px}
+.tvbox-skeleton-sub{height:10px;width:60%;border-radius:4px}
+
+
+/* ============================================
+   星枢片库 · 企业级工作台（侧栏 + 主区）
+   ============================================ */
+.tvbox-library-workspace {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  min-height: 560px;
+}
+
+/* 左侧站点导航 */
+.tvbox-library-sidebar {
+  width: 208px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-primary);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tvbox-library-side-title { font-size: 15px; font-weight: 700; color: var(--text-primary); padding: 0 4px; }
+.tvbox-library-side-sub { font-size: 11px; color: var(--text-muted); padding: 0 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.tvbox-library-nav,
+.tvbox-library-source {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.tvbox-library-nav strong,
+.tvbox-library-source strong { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.tvbox-library-nav span,
+.tvbox-library-source span { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.tvbox-library-nav:hover,
+.tvbox-library-source:hover { background: var(--bg-card-hover); }
+.tvbox-library-nav.active,
+.tvbox-library-source.active { background: var(--accent-muted, rgba(10, 89, 247, 0.08)); border-color: var(--accent); }
+.tvbox-library-nav.active strong,
+.tvbox-library-source.active strong { color: var(--accent); }
+.tvbox-library-nav { border-color: var(--border); background: var(--bg-elevated); }
+.tvbox-library-nav:first-child { order: -3; }
+.tvbox-library-nav[data-view="follow"] { order: -2; }
+.tvbox-library-nav[data-view="history"] { order: -1; margin-bottom: 6px; }
+
+/* 右侧主区 */
+.tvbox-library-main {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 工具栏：标题 + 搜索 */
+.tvbox-library-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tvbox-library-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.tvbox-library-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.tvbox-library-search { display: flex; gap: 8px; flex-shrink: 0; }
+.tvbox-library-search input {
+  width: 220px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.tvbox-library-search input:focus { border-color: var(--accent); }
+.tvbox-library-search button {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.tvbox-library-search button:hover { background: var(--accent2); }
+.tvbox-library-search-history { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -4px; }
+.tvbox-library-search-chip { display: inline-flex; align-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-primary); }
+.tvbox-library-search-chip button { border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; padding: 4px 8px; cursor: pointer; }
+.tvbox-library-search-chip button:first-child:hover { color: var(--accent); }
+.tvbox-library-search-chip .remove { border-left: 1px solid var(--border); color: var(--text-muted); padding: 4px 7px; }
+.tvbox-library-search-chip .remove:hover { color: var(--error, #dc2626); background: rgba(220, 38, 38, 0.08); }
+
+/* 分组 / 分类 */
+.tvbox-library-groups { display: flex; flex-wrap: wrap; gap: 6px; }
+.tvbox-library-groups:empty { display: none; }
+.tvbox-library-group {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-library-group:hover { border-color: var(--accent); color: var(--accent); }
+.tvbox-library-group.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.tvbox-library-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.tvbox-library-cats:empty { display: none; }
+.tvbox-library-cat {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-library-cat:hover { border-color: var(--accent); color: var(--accent); }
+.tvbox-library-cat.active { background: var(--accent-muted, rgba(10, 89, 247, 0.1)); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* napp03 筛选行 */
+.tvbox-library-filters { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; }
+.tvbox-library-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tvbox-library-filter-row > span { font-size: 12px; color: var(--text-muted); min-width: 40px; }
+.tvbox-library-filter {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-library-filter:hover { color: var(--accent); }
+.tvbox-library-filter.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* 列表 / 分区 */
+.tvbox-library-list { flex: 1; min-height: 240px; }
+.tvbox-library-section { margin-bottom: 24px; }
+.tvbox-library-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.tvbox-library-section-head h3 { font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 0; padding-left: 10px; border-left: 3px solid var(--accent); }
+.tvbox-library-section-head span { font-size: 11px; color: var(--text-muted); }
+.tvbox-library-more {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-library-more:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 海报卡片网格 */
+.tvbox-library-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 14px; }
+.tvbox-library-vod { cursor: pointer; }
+.tvbox-library-vod-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 2/3;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tvbox-library-vod:hover .tvbox-library-vod-poster { border-color: var(--accent); box-shadow: var(--shadow-card); }
+.tvbox-library-vod-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tvbox-library-vod-poster > span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.78), transparent);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 11px;
+  padding: 14px 8px 6px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tvbox-library-vod-title { font-size: 12.5px; font-weight: 600; color: var(--text-primary); margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tvbox-library-vod-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tvbox-library-card-actions { display: flex; gap: 6px; margin-top: 7px; }
+.tvbox-library-card-actions button { flex: 1; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; padding: 5px 6px; cursor: pointer; transition: all 0.15s; }
+.tvbox-library-card-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tvbox-library-card-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.tvbox-library-card-actions button[data-follow-card],
+.tvbox-library-card-actions button[data-follow-card].active { background: var(--accent-muted, rgba(10, 89, 247, 0.08)); color: var(--accent); border-color: var(--accent); }
+.tvbox-library-progress { height: 3px; margin-top: 6px; border-radius: 999px; background: var(--bg-primary); overflow: hidden; }
+.tvbox-library-progress i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+
+/* 分页 */
+.tvbox-library-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; padding: 18px 0 4px; }
+.tvbox-library-pager button {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-library-pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tvbox-library-pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+.tvbox-library-pager > span { font-size: 12px; color: var(--text-muted); }
+.tvbox-library-jump { font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
+.tvbox-library-jump input {
+  width: 52px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: center;
+  outline: none;
+}
+.tvbox-library-jump input:focus { border-color: var(--accent); }
+
+/* 播放错误 / 原站回退 */
+.tvbox-playback-error { text-align: center; padding: 40px 20px; }
+.tvbox-playback-error-title { font-size: 13px; color: var(--error, #dc2626); }
+.tvbox-origin-fallback .tvbox-open-ext {
+  display: inline-block;
+  margin-top: 10px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 7px 18px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.tvbox-origin-fallback .tvbox-open-ext:hover { background: var(--accent2); color: #fff; }
+
+/* 窄屏：侧栏折叠为横向 */
+@media (max-width: 900px) {
+  .tvbox-library-workspace { flex-direction: column; }
+  .tvbox-library-sidebar { width: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  .tvbox-library-side-sub { border-bottom: none; }
+  .tvbox-library-toolbar { flex-direction: column; }
+  .tvbox-library-search input { width: 100%; flex: 1; }
+}
+
+
+/* ============================================
+   搜索历史下拉面板（企业级）
+   ============================================ */
+.tvbox-search-wrap { position: relative; }
+.tvbox-search-history-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 300;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-float);
+  padding: 10px 12px 12px;
+}
+.tvbox-search-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.tvbox-search-history-head > span { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.tvbox-search-history-clear {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.tvbox-search-history-clear:hover { color: var(--error, #dc2626); background: var(--bg-card-hover); }
+.tvbox-search-history-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tvbox-history-item {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.tvbox-history-item:hover { border-color: var(--accent); }
+.tvbox-history-tag {
+  background: transparent;
+  border: none;
+  padding: 5px 4px 5px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tvbox-history-item:hover .tvbox-history-tag { color: var(--accent); }
+.tvbox-history-remove {
+  background: transparent;
+  border: none;
+  padding: 5px 8px 5px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.tvbox-history-remove:hover { color: var(--error, #dc2626); }
+
+/* ============================================
+   最近播放（横向卡片轨道）
+   ============================================ */
+.tvbox-history-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tvbox-history-title > span:first-child { font-size: 14px; }
+.tvbox-clear-danger:hover { border-color: var(--error, #dc2626) !important; color: var(--error, #dc2626) !important; }
+
+.tvbox-history-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 118px;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 2px 2px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.tvbox-history-rail::-webkit-scrollbar { height: 6px; }
+.tvbox-history-rail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.tvbox-hist-card { display: flex; flex-direction: column; }
+.tvbox-hist-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 2/3;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tvbox-hist-card:hover .tvbox-hist-poster { border-color: var(--accent); box-shadow: var(--shadow-card); }
+.tvbox-hist-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tvbox-hist-resume {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.tvbox-hist-source {
+  position: absolute;
+  bottom: 8px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.66);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 9px;
+  border-radius: 4px;
+  padding: 2px 5px;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tvbox-hist-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.tvbox-hist-progress > div { height: 100%; background: var(--accent); }
+.tvbox-hist-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tvbox-hist-ep {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  min-height: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tvbox-hist-actions { display: flex; gap: 6px; margin-top: 6px; }
+.tvbox-hist-action {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-hist-action:hover { border-color: var(--accent); color: var(--accent); }
+.tvbox-hist-action.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.tvbox-hist-action.primary:hover { background: var(--accent2); color: #fff; }
+
+
+/* ============================================
+   详情页 / 线路选择企业级样式
+   ============================================ */
+.tvbox-back-btn {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-back-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tvbox-ep-info {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  gap: 18px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.tvbox-ep-poster-wrap { width: 156px; aspect-ratio: 2/3; overflow: hidden; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); }
+.tvbox-ep-pic { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tvbox-ep-meta { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.tvbox-ep-rating { align-self: flex-start; background: rgba(251, 191, 36, 0.16); color: #b45309; border: 1px solid rgba(251, 191, 36, 0.32); border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 700; }
+[data-theme="dark"] .tvbox-ep-rating { color: #fbbf24; }
+.tvbox-ep-desc { color: var(--text-secondary); font-size: 13px; line-height: 1.75; max-height: 168px; overflow: auto; }
+.tvbox-line-panel {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+.tvbox-line-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.tvbox-line-panel-head span { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.tvbox-line-panel-head em { font-style: normal; font-size: 11px; color: var(--text-muted); }
+.tvbox-line-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.tvbox-line-tab {
+  min-width: 132px;
+  max-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tvbox-line-tab strong { font-size: 13px; font-weight: 700; color: var(--text-primary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tvbox-line-tab small { font-size: 11px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tvbox-line-tab b { font-size: 10px; color: var(--accent); font-weight: 700; }
+.tvbox-line-tab:hover { border-color: var(--accent); }
+.tvbox-line-tab.active { border-color: var(--accent); background: var(--accent-muted, rgba(10,89,247,0.1)); }
+.tvbox-ep-list-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 10px 0; padding-left: 10px; border-left: 3px solid var(--accent); }
+.tvbox-ep-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+.tvbox-ep-btn { border-radius: 8px; padding: 11px 8px; font-size: 13px; background: var(--bg-elevated); }
+@media (max-width: 760px) {
+  .tvbox-ep-info { grid-template-columns: 92px minmax(0, 1fr); }
+  .tvbox-ep-poster-wrap { width: 92px; }
+  .tvbox-ep-desc { max-height: 132px; }
+}
+
+
+/* ============================================
+   DESKTOP POLISH v3 · 搜索历史 + 详情页桌面端强覆盖
+   ============================================ */
+.tvbox-navbar { overflow: visible !important; }
+.tvbox-search-wrap { position: relative !important; z-index: 350 !important; }
+.tvbox-search-history-panel {
+  position: absolute !important;
+  top: calc(100% + 8px) !important;
+  left: 0 !important;
+  right: auto !important;
+  width: min(520px, 100%) !important;
+  display: none;
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16) !important;
+  padding: 10px !important;
+  color: var(--text-primary) !important;
+}
+[data-theme="dark"] .tvbox-search-history-panel { box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55) !important; }
+.tvbox-search-history-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 2px 4px 8px !important;
+  margin: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+.tvbox-search-history-head > span {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: var(--text-secondary) !important;
+}
+.tvbox-search-history-clear {
+  height: 24px !important;
+  padding: 0 8px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  background: var(--bg-primary) !important;
+  color: var(--text-muted) !important;
+  font-size: 12px !important;
+}
+.tvbox-search-history-tags {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  padding-top: 8px !important;
+}
+.tvbox-history-item {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 28px !important;
+  align-items: center !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+.tvbox-history-item:hover { background: var(--bg-card-hover) !important; }
+.tvbox-history-tag {
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 8px 10px !important;
+  color: var(--text-secondary) !important;
+  font-size: 13px !important;
+  text-align: left !important;
+  cursor: pointer !important;
+}
+.tvbox-history-clock { color: var(--text-muted) !important; font-size: 12px !important; }
+.tvbox-history-text { overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
+.tvbox-history-remove {
+  width: 28px !important;
+  height: 28px !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  font-size: 14px !important;
+  cursor: pointer !important;
+}
+.tvbox-history-remove:hover { color: var(--error, #dc2626) !important; }
+
+/* 详情页：桌面端大面板，而不是移动端弹窗 */
+.tvbox-player-overlay { padding: 24px !important; align-items: center !important; }
+.tvbox-player-box {
+  width: min(1180px, calc(100vw - 64px)) !important;
+  max-width: none !important;
+  height: min(820px, calc(100vh - 64px)) !important;
+  max-height: none !important;
+  border-radius: 12px !important;
+  background: var(--bg-elevated) !important;
+}
+.tvbox-player-hdr {
+  height: 58px !important;
+  padding: 0 24px !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+.tvbox-player-title { font-size: 18px !important; font-weight: 800 !important; }
+.tvbox-player-body {
+  padding: 22px 24px 24px !important;
+  display: grid !important;
+  grid-template-columns: 320px minmax(0, 1fr) !important;
+  grid-template-areas:
+    "info info"
+    "lines episodes" !important;
+  gap: 18px !important;
+  align-content: start !important;
+}
+.tvbox-player-body > div:first-child { grid-column: 1 / -1 !important; margin-bottom: 0 !important; }
+.tvbox-ep-info {
+  grid-area: info !important;
+  display: grid !important;
+  grid-template-columns: 210px minmax(0, 1fr) !important;
+  gap: 24px !important;
+  min-height: 280px !important;
+  padding: 18px !important;
+  margin: 0 !important;
+  background: var(--bg-primary) !important;
+  border-radius: 10px !important;
+}
+.tvbox-ep-poster-wrap { width: 210px !important; height: 300px !important; }
+.tvbox-ep-desc { max-height: 260px !important; font-size: 15px !important; line-height: 1.9 !important; }
+.tvbox-line-panel {
+  grid-area: lines !important;
+  margin: 0 !important;
+  height: 100% !important;
+  min-height: 330px !important;
+  padding: 14px !important;
+  overflow: hidden !important;
+}
+.tvbox-line-tabs {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  max-height: 292px !important;
+  gap: 8px !important;
+}
+.tvbox-line-tab {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  min-height: 64px !important;
+}
+.tvbox-ep-list-title {
+  grid-area: episodes !important;
+  align-self: start !important;
+  margin: 0 0 -2px !important;
+}
+.tvbox-ep-grid {
+  grid-area: episodes !important;
+  margin-top: 38px !important;
+  align-self: start !important;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)) !important;
+  gap: 10px !important;
+}
+.tvbox-player-foot { padding: 10px 24px !important; }
+@media (max-width: 980px) {
+  .tvbox-player-body { grid-template-columns: 1fr !important; grid-template-areas: "info" "lines" "episodes" !important; }
+  .tvbox-line-panel { min-height: auto !important; }
+  .tvbox-line-tabs { flex-direction: row !important; overflow-x: auto !important; max-height: none !important; }
+}
+
+/* structured private library redesign */
+.tvbox-missav-app { min-height:calc(100vh - 150px); display:flex; flex-direction:column; gap:16px; color:#eef2ff; margin:-12px -14px -24px; padding:18px 20px 28px; background:radial-gradient(circle at 18% -10%, rgba(244,63,94,.34), transparent 32%), radial-gradient(circle at 84% 4%, rgba(59,130,246,.28), transparent 30%), linear-gradient(180deg,#0b1020 0%,#111827 42%,#f4f6fb 42%,#f4f6fb 100%); }
+.tvbox-missav-topbar { display:grid; grid-template-columns:minmax(320px,1fr) minmax(360px,520px); align-items:end; gap:22px; padding:26px 28px; border:1px solid rgba(255,255,255,.12); border-radius:28px; background:linear-gradient(135deg,rgba(15,23,42,.88),rgba(88,28,135,.58)), linear-gradient(90deg,rgba(236,72,153,.20),rgba(59,130,246,.14)); box-shadow:0 28px 70px rgba(15,23,42,.34); overflow:hidden; position:relative; }
+.tvbox-missav-topbar:before { content:""; position:absolute; inset:-40% -12% auto auto; width:420px; height:260px; background:radial-gradient(circle,rgba(236,72,153,.35),transparent 65%); filter:blur(12px); }
+.tvbox-missav-hero-copy, .tvbox-missav-hero-actions { position:relative; z-index:1; }
+.tvbox-missav-kicker { color:#f9a8d4; font-size:12px; font-weight:900; letter-spacing:.18em; margin-bottom:8px; }
+.tvbox-missav-title { display:flex; align-items:baseline; gap:14px; min-width:max-content; }
+.tvbox-missav-title strong { font-size:42px; line-height:1; letter-spacing:-.04em; color:#fff; }
+.tvbox-missav-title span { color:#cbd5e1; font-size:13px; font-weight:800; }
+.tvbox-missav-hero-copy p { margin:12px 0 0; max-width:560px; color:#cbd5e1; font-size:14px; }
+.tvbox-missav-hero-actions { display:flex; flex-direction:column; gap:12px; }
+.tvbox-missav-search { display:flex; align-items:center; gap:8px; padding:6px; border:1px solid rgba(255,255,255,.16); border-radius:18px; background:rgba(255,255,255,.10); backdrop-filter:blur(16px); }
+.tvbox-missav-search input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:#fff; padding:12px 12px; font-size:14px; }
+.tvbox-missav-search input::placeholder { color:#cbd5e1; }
+.tvbox-missav-search button { border:0; border-radius:14px; padding:11px 18px; background:linear-gradient(135deg,#ec4899,#8b5cf6); color:#fff; font-weight:900; cursor:pointer; box-shadow:0 12px 28px rgba(236,72,153,.28); }
+.tvbox-missav-overview { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+.tvbox-missav-overview span { display:block; padding:10px 8px; border:1px solid rgba(255,255,255,.14); border-radius:14px; background:rgba(255,255,255,.08); color:#e2e8f0; text-align:center; font-size:12px; font-weight:900; }
+.tvbox-missav-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:18px; min-height:calc(100vh - 290px); color:#0f172a; }
+.tvbox-missav-nav { padding:14px; border:1px solid rgba(148,163,184,.18); border-radius:24px; background:rgba(255,255,255,.86); box-shadow:0 18px 45px rgba(15,23,42,.08); overflow:auto; }
+.tvbox-missav-nav section + section { margin-top:18px; }
+.tvbox-missav-nav h3 { margin:0 0 8px; padding:0 6px; color:#94a3b8; font-size:12px; font-weight:950; letter-spacing:.12em; }
+.tvbox-missav-nav-item { width:100%; display:flex; align-items:center; border:0; border-radius:14px; padding:11px 12px; margin:3px 0; background:transparent; color:#475569; text-align:left; cursor:pointer; font-size:14px; font-weight:850; transition:all .18s ease; }
+.tvbox-missav-nav-item:hover { background:#f8fafc; color:#111827; transform:translateX(2px); }
+.tvbox-missav-nav-item.active { background:linear-gradient(135deg,#fdf2f8,#ede9fe); color:#db2777; box-shadow:inset 3px 0 0 #ec4899; }
+.tvbox-missav-content { min-width:0; display:flex; flex-direction:column; gap:14px; }
+.tvbox-missav-subnav { display:block; }
+.tvbox-missav-subnav:empty { display:none; }
+.tvbox-missav-subnav-title { margin:0 0 8px; color:#64748b; font-size:12px; font-weight:950; letter-spacing:.08em; }
+.tvbox-missav-subnav-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(128px,1fr)); gap:8px; padding:12px; border:1px solid rgba(148,163,184,.18); border-radius:22px; background:rgba(255,255,255,.84); box-shadow:0 14px 34px rgba(15,23,42,.06); }
+.tvbox-missav-subnav-grid button { min-width:0; border:1px solid rgba(226,232,240,.95); border-radius:14px; padding:10px 12px; background:#fff; color:#475569; cursor:pointer; font-weight:900; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tvbox-missav-subnav-grid button:hover, .tvbox-missav-subnav-grid button.active { border-color:#ec4899; color:#db2777; background:#fdf2f8; }
+.tvbox-missav-list-head { display:flex; justify-content:space-between; align-items:center; gap:14px; padding:16px 18px; border:1px solid rgba(148,163,184,.16); border-radius:24px; background:rgba(255,255,255,.88); box-shadow:0 18px 45px rgba(15,23,42,.07); }
+.tvbox-missav-list-head h2 { margin:0; color:#0f172a; font-size:24px; letter-spacing:-.02em; }
+.tvbox-missav-list-head p { margin:5px 0 0; color:#64748b; font-size:13px; }
+.tvbox-missav-breadcrumb { margin-bottom:4px; color:#db2777; font-size:12px; font-weight:950; letter-spacing:.06em; }
+.tvbox-missav-head-actions button, .tvbox-missav-list-head > button { border:0; border-radius:999px; padding:10px 17px; background:#0f172a; color:#fff; cursor:pointer; font-weight:900; box-shadow:0 12px 24px rgba(15,23,42,.16); }
+.tvbox-missav-list { min-height:420px; }
+.tvbox-missav-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:18px; }
+.tvbox-missav-card { overflow:hidden; border:1px solid rgba(148,163,184,.16); border-radius:22px; background:#fff; box-shadow:0 18px 40px rgba(15,23,42,.10); transition:transform .18s ease, box-shadow .18s ease; }
+.tvbox-missav-card:hover { transform:translateY(-4px); box-shadow:0 26px 58px rgba(15,23,42,.16); }
+.tvbox-missav-poster { position:relative; display:block; width:100%; padding:0; border:0; background:#0f172a; cursor:pointer; overflow:hidden; aspect-ratio:16/9; }
+.tvbox-missav-poster img { width:100%; height:100%; object-fit:cover; display:block; transition:transform .28s ease; }
+.tvbox-missav-card:hover .tvbox-missav-poster img { transform:scale(1.045); }
+.tvbox-missav-poster:after { content:""; position:absolute; inset:0; background:linear-gradient(180deg,transparent 42%,rgba(15,23,42,.64)); pointer-events:none; }
+.tvbox-missav-duration { position:absolute; right:10px; bottom:10px; z-index:2; padding:5px 8px; border-radius:999px; background:rgba(15,23,42,.82); color:#fff; font-size:12px; font-weight:900; }
+.tvbox-missav-playmark { position:absolute; left:10px; bottom:10px; z-index:2; padding:5px 10px; border-radius:999px; background:linear-gradient(135deg,#ec4899,#8b5cf6); color:#fff; font-size:12px; font-weight:950; }
+.tvbox-missav-card-body { padding:12px 12px 14px; }
+.tvbox-missav-card-title { min-height:42px; color:#111827; font-size:14px; line-height:1.45; font-weight:850; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.tvbox-missav-card-actions { display:flex; gap:8px; margin-top:12px; }
+.tvbox-missav-card-actions button { flex:1; border:1px solid #e2e8f0; border-radius:12px; padding:9px 10px; background:#f8fafc; color:#334155; font-weight:900; cursor:pointer; }
+.tvbox-missav-card-actions button:first-child { border-color:transparent; background:#0f172a; color:#fff; }
+.tvbox-missav-pager { display:block; }
+.tvbox-missav-pager:empty { display:none; }
+.tvbox-missav-pager-main { display:flex; flex-wrap:wrap; align-items:center; gap:9px; padding:14px; border:1px solid rgba(148,163,184,.16); border-radius:22px; background:#fff; color:#64748b; font-size:12px; box-shadow:0 14px 32px rgba(15,23,42,.06); }
+.tvbox-missav-pager-main button { border:0; border-radius:999px; padding:9px 15px; background:#0f172a; color:#fff; cursor:pointer; font-weight:950; }
+.tvbox-missav-pager-main button:disabled { opacity:.4; cursor:not-allowed; }
+.tvbox-missav-pager-main input { width:72px; border:1px solid #cbd5e1; border-radius:12px; padding:7px 9px; background:#fff; color:#0f172a; }
+[data-theme="dark"] .tvbox-missav-app { background:radial-gradient(circle at 18% -10%, rgba(244,63,94,.28), transparent 32%), radial-gradient(circle at 84% 4%, rgba(59,130,246,.24), transparent 30%), linear-gradient(180deg,#050816 0%,#0f172a 46%,#0b1020 46%,#0b1020 100%); }
+[data-theme="dark"] .tvbox-missav-nav, [data-theme="dark"] .tvbox-missav-subnav-scroll, [data-theme="dark"] .tvbox-missav-list-head, [data-theme="dark"] .tvbox-missav-card, [data-theme="dark"] .tvbox-missav-pager-main { background:rgba(15,23,42,.84); color:#e2e8f0; border-color:rgba(255,255,255,.10); }
+[data-theme="dark"] .tvbox-missav-list-head h2, [data-theme="dark"] .tvbox-missav-card-title { color:#f8fafc; }
+[data-theme="dark"] .tvbox-missav-card-actions button { background:#111827; color:#cbd5e1; border-color:rgba(255,255,255,.10); }
+@media (max-width: 1080px) { .tvbox-missav-topbar { grid-template-columns:1fr; } .tvbox-missav-layout { grid-template-columns:1fr; } .tvbox-missav-nav { max-height:280px; } }
+@media (max-width: 720px) { .tvbox-missav-app { margin:-12px -14px -24px; padding:14px; } .tvbox-missav-title strong { font-size:34px; } .tvbox-missav-overview { grid-template-columns:repeat(2,minmax(0,1fr)); } .tvbox-missav-grid { grid-template-columns:1fr; } .tvbox-myavlive-layout { grid-template-columns:1fr; } .tvbox-myavlive-app .tvbox-missav-nav { position:relative; height:auto; max-height:210px; border-right:0; border-bottom:1px solid rgba(255,255,255,.08); } .tvbox-myavlive-app .tvbox-missav-list, .tvbox-myavlive-app .tvbox-missav-grid { grid-template-columns:repeat(auto-fill,150px); } .tvbox-myavlive-live-card { width:150px; } .tvbox-myavlive-live-cover { width:148px; height:112px; } }
+
+/* ── 精品专区授权验证 ── */
+.tvbox-auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 18, 32, 0.42);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+.tvbox-auth-dialog {
+  position: relative;
+  width: min(460px, calc(100vw - 48px));
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247,249,255,0.96));
+  box-shadow: 0 28px 80px rgba(15, 35, 75, 0.28), 0 8px 24px rgba(10, 89, 247, 0.14);
+  padding: 26px;
+  color: var(--text-primary);
+  animation: tvboxAuthIn .18s ease-out;
+}
+
+[data-theme="dark"] .tvbox-auth-dialog {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, rgba(25,30,40,0.98), rgba(15,19,27,0.96));
+  box-shadow: 0 28px 80px rgba(0,0,0,0.56), 0 8px 24px rgba(49,122,247,0.16);
+}
+
+.tvbox-auth-glow {
+  position: absolute;
+  right: -90px;
+  top: -90px;
+  width: 220px;
+  height: 220px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(10, 89, 247, 0.22), rgba(10, 89, 247, 0));
+  pointer-events: none;
+}
+
+.tvbox-auth-head {
+  position: relative;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.tvbox-auth-logo {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--accent-gradient);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 800;
+  box-shadow: 0 12px 28px rgba(10, 89, 247, 0.32);
+}
+
+.tvbox-auth-kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.tvbox-auth-head h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.tvbox-auth-head p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tvbox-auth-field label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tvbox-auth-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  padding: 5px 6px 5px 14px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
+  transition: border-color .16s, box-shadow .16s;
+}
+
+.tvbox-auth-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(10, 89, 247, 0.13);
+}
+
+.tvbox-auth-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  letter-spacing: .04em;
+}
+
+.tvbox-auth-input-wrap button {
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: rgba(10, 89, 247, 0.09);
+  color: var(--accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tvbox-auth-error {
+  min-height: 20px;
+  margin-top: 8px;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tvbox-auth-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.tvbox-auth-foot button {
+  min-width: 96px;
+  height: 42px;
+  border-radius: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .12s, box-shadow .12s, background .12s;
+}
+
+.tvbox-auth-foot button:active { transform: translateY(1px); }
+
+.tvbox-auth-cancel {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.tvbox-auth-submit {
+  border: 0;
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(10, 89, 247, 0.26);
+}
+
+.tvbox-auth-shake .tvbox-auth-dialog { animation: tvboxAuthShake .22s ease-in-out; }
+
+@keyframes tvboxAuthIn {
+  from { opacity: 0; transform: translateY(10px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes tvboxAuthShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-7px); }
+  75% { transform: translateX(7px); }
+}
+
+.tvbox-myavlive-app { min-height:calc(100vh - 90px); background:linear-gradient(180deg,#f8fafc,#eef2f7)!important; color:#111827; padding:0 16px 28px; }
+.tvbox-myavlive-app .tvbox-missav-topbar { display:none; }
+.tvbox-myavlive-layout { grid-template-columns:168px minmax(0,1fr); gap:18px; min-height:calc(100vh - 104px); color:#111827; }
+.tvbox-myavlive-app .tvbox-missav-nav { position:sticky; top:0; height:calc(100vh - 104px); border-radius:0; border:0; border-right:1px solid rgba(15,23,42,.08); background:rgba(255,255,255,.86); box-shadow:none; padding:18px 10px; max-height:none; backdrop-filter:blur(16px); }
+.tvbox-myavlive-app .tvbox-missav-nav h3 { color:#64748b; font-size:12px; padding:0 10px 8px; letter-spacing:.12em; }
+.tvbox-myavlive-app .tvbox-missav-nav-item { color:#334155; border-radius:12px; padding:10px 12px; font-size:14px; font-weight:900; letter-spacing:.01em; }
+.tvbox-myavlive-app .tvbox-missav-nav-item:hover { background:#e2e8f0; color:#0f172a; transform:none; }
+.tvbox-myavlive-app .tvbox-missav-nav-item.active { background:#111827; color:#fff; box-shadow:0 10px 26px rgba(15,23,42,.14); }
+.tvbox-myavlive-app .tvbox-missav-content { gap:14px; padding-top:18px; }
+.tvbox-myavlive-app .tvbox-missav-list-head { position:sticky; top:0; z-index:5; padding:12px 0 14px; border:0; border-radius:0; background:linear-gradient(180deg,rgba(248,250,252,.96),rgba(248,250,252,.82)); box-shadow:none; color:#111827; backdrop-filter:blur(14px); }
+.tvbox-myavlive-app .tvbox-missav-list-head h2 { color:#0f172a; font-size:30px; line-height:1; font-weight:950; }
+.tvbox-myavlive-app .tvbox-missav-list-head p { color:#64748b; font-size:13px; }
+.tvbox-myavlive-app .tvbox-missav-breadcrumb { color:#db2777; font-size:13px; }
+.tvbox-myavlive-app .tvbox-missav-head-actions button { background:#111827; color:#fff; box-shadow:0 10px 28px rgba(15,23,42,.14); padding:10px 18px; }
+.tvbox-myavlive-app .tvbox-missav-list { display:grid; grid-template-columns:repeat(auto-fill,180px); justify-content:start; align-items:start; gap:10px; min-height:420px; }
+.tvbox-myavlive-app .tvbox-missav-grid { grid-template-columns:repeat(auto-fill,180px); justify-content:start; align-items:start; gap:10px; }
+.tvbox-myavlive-live-card { width:180px; border-radius:10px; background:#000; border:1px solid rgba(15,23,42,.10); box-shadow:0 10px 26px rgba(15,23,42,.12); overflow:hidden; transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease; }
+.tvbox-myavlive-live-card:hover { transform:translateY(-2px); border-color:rgba(219,39,119,.55); box-shadow:0 18px 46px rgba(219,39,119,.12),0 18px 42px rgba(15,23,42,.18); }
+.tvbox-myavlive-live-card .tvbox-missav-card-body { display:none; }
+
+.tvbox-myavlive-live-cover {
+  position: relative;
+  width: 178px;
+  height: 134px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  overflow: hidden;
+  background:#000;
+  aspect-ratio:auto;
+}
+
+.tvbox-myavlive-live-cover:before {
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:1;
+  background:linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.12) 44%,rgba(0,0,0,.72));
+  pointer-events:none;
+}
+
+.tvbox-myavlive-live-cover:after { content:""; position:absolute; inset:auto 0 0; z-index:2; height:42%; background:linear-gradient(180deg,transparent,rgba(0,0,0,.78)); pointer-events:none; }
+
+.tvbox-myavlive-live-cover iframe,
+.tvbox-myavlive-live-cover video,
+.tvbox-myavlive-live-cover img {
+  width:100%;
+  height:100%;
+  display:block;
+  border:0;
+  object-fit:cover;
+  background:#000;
+  transform:none!important;
+}
+
+.tvbox-myavlive-live-signal {
+  position:absolute;
+  left:34px;
+  top:8px;
+  z-index:4;
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:3px 7px;
+  border-radius:6px;
+  background:rgba(220,38,38,.86);
+  color:#fff;
+  font-size:10px;
+  font-weight:950;
+  letter-spacing:.04em;
+  box-shadow:0 0 0 1px rgba(255,255,255,.10);
+}
+.tvbox-myavlive-live-signal i { width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 0 0 rgba(255,255,255,.65); animation:tvboxLivePulse 1.2s ease-out infinite; }
+
+.tvbox-myavlive-live-tip { display:none; }
+.tvbox-myavlive-viewers { position:absolute; right:7px; bottom:7px; z-index:4; padding:4px 7px; border-radius:999px; background:rgba(0,0,0,.76); color:#fff; font-size:11px; font-weight:900; backdrop-filter:blur(8px); }
+.tvbox-myavlive-device { position:absolute; left:7px; top:7px; z-index:4; width:18px; height:18px; display:grid; place-items:center; border-radius:5px; background:rgba(0,0,0,.66); color:#fff; font-size:16px; font-weight:900; }
+.tvbox-myavlive-new { position:absolute; right:8px; top:8px; z-index:4; display:none; padding:3px 7px; border-radius:5px; background:#fbbf24; color:#111827; font-size:11px; font-weight:950; }
+.tvbox-myavlive-live-caption { position:absolute; left:8px; right:8px; bottom:8px; z-index:4; display:grid; gap:3px; color:#fff; text-align:left; pointer-events:none; }
+.tvbox-myavlive-live-caption strong { max-width:98px; font-size:13px; line-height:1.1; font-weight:950; text-shadow:0 2px 8px rgba(0,0,0,.85); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tvbox-myavlive-live-caption small { display:none; color:#cbd5e1; font-size:11px; text-shadow:0 2px 8px rgba(0,0,0,.85); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tvbox-myavlive-live-empty { width:100%; height:100%; display:grid; place-items:center; align-content:center; gap:4px; color:#e2e8f0; background:#111; }
+.tvbox-myavlive-live-empty span { font-size:22px; font-weight:950; letter-spacing:.14em; color:#ef4444; }
+.tvbox-myavlive-live-empty small { color:#94a3b8; font-size:11px; }
+[data-theme="dark"] .tvbox-myavlive-app { background:linear-gradient(180deg,#07070a,#030304)!important; color:#fff; }
+[data-theme="dark"] .tvbox-myavlive-layout { color:#fff; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-nav { border-right-color:rgba(255,255,255,.08); background:rgba(8,8,10,.96); }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-nav h3 { color:#a1a1aa; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-nav-item { color:#e5e7eb; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-nav-item:hover { background:#18181b; color:#fff; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-nav-item.active { background:#fff; color:#111827; box-shadow:0 10px 26px rgba(255,255,255,.10); }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-list-head { background:linear-gradient(180deg,rgba(7,7,10,.98),rgba(7,7,10,.86)); color:#fff; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-list-head h2 { color:#fff; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-list-head p { color:#9ca3af; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-breadcrumb { color:#ff4fc3; }
+[data-theme="dark"] .tvbox-myavlive-app .tvbox-missav-head-actions button { background:#fff; color:#111; box-shadow:0 10px 28px rgba(255,255,255,.10); }
+[data-theme="dark"] .tvbox-myavlive-live-card { border-color:rgba(255,255,255,.08); box-shadow:0 10px 28px rgba(0,0,0,.28); }
+[data-theme="dark"] .tvbox-myavlive-live-card:hover { border-color:rgba(255,79,195,.55); box-shadow:0 18px 46px rgba(255,79,195,.10),0 18px 42px rgba(0,0,0,.42); }
+@keyframes tvboxLivePulse { 0% { box-shadow:0 0 0 0 rgba(255,255,255,.65); } 100% { box-shadow:0 0 0 8px rgba(255,255,255,0); } }
+
+/* ===== 星枢影视跨端增强：手机 + TV ===== */
+.tvbox-root button,
+.tvbox-root input,
+.tvbox-root select,
+.tvbox-root textarea,
+.tvbox-card,
+.tvbox-live-card,
+.tvbox-history-item,
+.tvbox-missav-nav-item,
+.tvbox-myavlive-live-card {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.tvbox-root button:focus-visible,
+.tvbox-root input:focus-visible,
+.tvbox-root select:focus-visible,
+.tvbox-root textarea:focus-visible,
+.tvbox-card:focus-visible .tvbox-card-inner,
+.tvbox-live-card:focus-visible,
+.tvbox-history-item:focus-visible,
+.tvbox-missav-nav-item:focus-visible,
+.tvbox-myavlive-live-card:focus-visible,
+.tvbox-device-tv .tvbox-root button:focus,
+.tvbox-device-tv .tvbox-root input:focus,
+.tvbox-device-tv .tvbox-root select:focus,
+.tvbox-device-tv .tvbox-card:focus .tvbox-card-inner,
+.tvbox-device-tv .tvbox-live-card:focus,
+.tvbox-device-tv .tvbox-history-item:focus,
+.tvbox-device-tv .tvbox-missav-nav-item:focus,
+.tvbox-device-tv .tvbox-myavlive-live-card:focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 6px rgba(49, 122, 247, 0.28), var(--shadow-card);
+}
+
+.tvbox-device-tv .tvbox-root {
+  min-height: 100vh;
+  overscroll-behavior: none;
+}
+
+.tvbox-device-tv .tvbox-navbar {
+  padding-left: max(44px, env(safe-area-inset-left));
+  padding-right: max(44px, env(safe-area-inset-right));
+}
+
+.tvbox-device-tv .tvbox-brand-name {
+  font-size: 24px;
+}
+
+.tvbox-device-tv .tvbox-search-input,
+.tvbox-device-tv .tvbox-search-btn,
+.tvbox-device-tv .tvbox-mode-tab,
+.tvbox-device-tv .tvbox-cat-chip,
+.tvbox-device-tv .tvbox-src-chip,
+.tvbox-device-tv .tvbox-page-btn,
+.tvbox-device-tv .tvbox-ep-btn,
+.tvbox-device-tv .tvbox-source-tab,
+.tvbox-device-tv .tvbox-player-close,
+.tvbox-device-tv .tvbox-player-mini {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.tvbox-device-tv .tvbox-content {
+  padding: 28px max(44px, env(safe-area-inset-right)) 72px max(44px, env(safe-area-inset-left));
+}
+
+.tvbox-device-tv .tvbox-grid {
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 24px;
+}
+
+.tvbox-device-tv .tvbox-live-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.tvbox-device-tv .tvbox-card-title,
+.tvbox-device-tv .tvbox-live-name,
+.tvbox-device-tv .tvbox-detail-name,
+.tvbox-device-tv .tvbox-player-title {
+  font-size: 18px;
+}
+
+.tvbox-device-tv .tvbox-card-sub,
+.tvbox-device-tv .tvbox-detail-desc,
+.tvbox-device-tv .tvbox-open-ext {
+  font-size: 14px;
+}
+
+.tvbox-device-tv .tvbox-player-box {
+  max-width: min(1480px, calc(100vw - 88px));
+  max-height: calc(100vh - 88px);
+}
+
+.tvbox-device-tv .tvbox-player-body video,
+.tvbox-device-tv .tvbox-player-body iframe,
+.tvbox-device-tv .tvbox-player-body .tvbox-video-frame {
+  max-height: calc(100vh - 220px);
+}
+
+.tvbox-device-mobile .tvbox-root {
+  min-height: 100dvh;
+}
+
+.tvbox-device-mobile .tvbox-navbar {
+  padding-top: env(safe-area-inset-top);
+}
+
+.tvbox-device-mobile .tvbox-content,
+.tvbox-device-mobile .tvbox-player-overlay,
+.tvbox-device-mobile .tvbox-url-overlay {
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+}
+
+@media (max-width: 820px) {
+  .tvbox-navbar { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .tvbox-brand { justify-content: center; }
+  .tvbox-mode-tabs,
+  .tvbox-catbar,
+  .tvbox-srcbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tvbox-mode-tabs::-webkit-scrollbar,
+  .tvbox-catbar::-webkit-scrollbar,
+  .tvbox-srcbar::-webkit-scrollbar { display: none; }
+  .tvbox-search-box { min-height: 44px; }
+  .tvbox-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 12px; }
+  .tvbox-live-grid { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 10px; }
+  .tvbox-detail-info { flex-direction: column; }
+  .tvbox-detail-pic { width: min(42vw, 150px); }
+  .tvbox-player-overlay { padding: 8px; }
+  .tvbox-player-box { max-height: calc(100dvh - 16px); border-radius: 12px; }
+  .tvbox-player-hdr { padding: 10px 12px; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .tvbox-navbar { position: static; }
+  .tvbox-content { padding-top: 12px; padding-bottom: 16px; }
+  .tvbox-player-overlay { padding: 6px; }
+  .tvbox-player-box { max-height: calc(100vh - 12px); }
+}
+

@@ -1,0 +1,3590 @@
+#[cfg(target_os = "windows")]
+use aes::Aes256;
+use base64::{engine::general_purpose, Engine as _};
+#[cfg(target_os = "windows")]
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+#[cfg(target_os = "windows")]
+use hmac::{Hmac, Mac};
+use serde::Serialize;
+#[cfg(target_os = "windows")]
+use sha1::Sha1;
+#[cfg(target_os = "windows")]
+use tauri::Emitter;
+#[cfg(target_os = "windows")]
+type Aes256CbcDec = cbc::Decryptor<Aes256>;
+#[cfg(target_os = "windows")]
+type HmacSha1 = Hmac<Sha1>;
+#[cfg(target_os = "windows")]
+use std::net::SocketAddr;
+/// AI 助手工具命令
+/// 提供终端执行、文件读写、目录列表等能力
+/// 仅在用户主动开启工具后由 AI 调用
+#[cfg(target_os = "windows")]
+#[allow(unused_imports)]
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
+use tauri::Manager;
+
+/// 审计日志：记录 AI 助手的敏感操作（exec / read / write）
+fn audit_log(action: &str, detail: &str) {
+    let log_dir = super::openclaw_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("assistant-audit.log");
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let line = format!("[{ts}] [{action}] {detail}\n");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
+/// 星枢OpenClaw 数据目录（~/.openclaw/星枢OpenClaw/）
+fn data_dir() -> PathBuf {
+    super::openclaw_dir().join("星枢OpenClaw")
+}
+
+/// 设备信息：用于卡密绑定等需要稳定设备标识的前端流程。
+/// 只返回本机主机名和首个可用 MAC，不做网络访问。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInfo {
+    hostname: String,
+    mac_address: Option<String>,
+}
+
+#[tauri::command]
+pub async fn device_info() -> Result<DeviceInfo, String> {
+    let hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".into());
+    let mac_address = read_primary_mac_address().await;
+    Ok(DeviceInfo {
+        hostname,
+        mac_address,
+    })
+}
+
+async fn read_primary_mac_address() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        // 售卖版启动热路径禁止 PowerShell：Get-CimInstance 会频繁拉起 powershell.exe。
+        // getmac 是轻量原生命令，隐藏窗口执行；读不到时返回 None，不阻塞应用启动。
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        return tokio::process::Command::new("getmac")
+            .args(["/fo", "csv", "/nh"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .ok()
+            .and_then(|out| parse_mac_output(&out.stdout));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return tokio::process::Command::new("sh")
+            .args(["-c", "ifconfig en0 | awk '/ether/{print $2; exit}'"])
+            .output()
+            .await
+            .ok()
+            .and_then(|out| parse_mac_output(&out.stdout));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(mut entries) = tokio::fs::read_dir("/sys/class/net").await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == "lo" {
+                    continue;
+                }
+                let path = entry.path().join("address");
+                if let Ok(bytes) = tokio::fs::read(path).await {
+                    if let Some(mac) = parse_mac_output(&bytes) {
+                        return Some(mac);
+                    }
+                }
+            }
+        }
+        return None;
+    }
+
+    #[allow(unreachable_code)]
+    None
+}
+
+fn parse_mac_output(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    for token in text.split(|c: char| c == ',' || c == '"' || c.is_whitespace()) {
+        let value = token.trim();
+        if value.len() == 17
+            && value.chars().enumerate().all(|(idx, ch)| match idx {
+                2 | 5 | 8 | 11 | 14 => ch == ':' || ch == '-',
+                _ => ch.is_ascii_hexdigit(),
+            })
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// 确保数据目录及子目录存在，返回目录路径
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn assistant_ensure_data_dir() -> Result<String, String> {
+    let base = data_dir();
+    let subdirs = ["images", "sessions", "cache"];
+    for sub in &subdirs {
+        let dir = base.join(sub);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| format!("创建目录 {} 失败: {e}", dir.display()))?;
+    }
+    Ok(base.to_string_lossy().to_string())
+}
+
+/// 保存图片（base64 → 文件），返回文件路径
+#[tauri::command]
+pub async fn assistant_save_image(id: String, data: String) -> Result<String, String> {
+    let dir = data_dir().join("images");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("创建目录失败: {e}"))?;
+
+    // data 可能包含 data:image/xxx;base64, 前缀
+    let pure_b64 = if let Some(pos) = data.find(",") {
+        &data[pos + 1..]
+    } else {
+        &data
+    };
+
+    // 从 data URI 提取扩展名
+    let ext = if data.starts_with("data:image/png") {
+        "png"
+    } else if data.starts_with("data:image/gif") {
+        "gif"
+    } else if data.starts_with("data:image/webp") {
+        "webp"
+    } else {
+        "jpg"
+    };
+
+    let filename = format!("{}.{}", id, ext);
+    let filepath = dir.join(&filename);
+
+    let bytes = general_purpose::STANDARD
+        .decode(pure_b64)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+
+    tokio::fs::write(&filepath, &bytes)
+        .await
+        .map_err(|e| format!("写入图片失败: {e}"))?;
+
+    Ok(filepath.to_string_lossy().to_string())
+}
+
+/// 加载图片（文件 → base64 data URI）
+#[tauri::command]
+pub async fn assistant_load_image(id: String) -> Result<String, String> {
+    let dir = data_dir().join("images");
+
+    // 尝试各种扩展名
+    let mut found: Option<PathBuf> = None;
+    for ext in &["jpg", "png", "gif", "webp", "jpeg"] {
+        let path = dir.join(format!("{}.{}", id, ext));
+        if path.exists() {
+            found = Some(path);
+            break;
+        }
+    }
+
+    let filepath = found.ok_or_else(|| format!("图片 {} 不存在", id))?;
+    let bytes = tokio::fs::read(&filepath)
+        .await
+        .map_err(|e| format!("读取图片失败: {e}"))?;
+
+    let ext = filepath
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg");
+    let mime = match ext {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    };
+
+    let b64 = general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+fn media_mime_from_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "m4v" => "video/mp4",
+        "avi" => "video/x-msvideo",
+        "mkv" => "video/x-matroska",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        _ => "application/octet-stream",
+    }
+}
+
+#[tauri::command]
+pub async fn assistant_load_media_file(path: String) -> Result<String, String> {
+    let filepath = PathBuf::from(path.trim().trim_start_matches("file://"));
+    if !filepath.exists() {
+        return Err(format!("媒体文件不存在: {}", filepath.to_string_lossy()));
+    }
+    if !filepath.is_file() {
+        return Err(format!("不是文件: {}", filepath.to_string_lossy()));
+    }
+    let bytes = tokio::fs::read(&filepath)
+        .await
+        .map_err(|e| format!("读取媒体文件失败: {e}"))?;
+    let mime = media_mime_from_path(&filepath);
+    let b64 = general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+pub async fn assistant_open_containing_folder(path: String) -> Result<(), String> {
+    let raw = path.trim().trim_start_matches("file://");
+    let filepath = PathBuf::from(raw);
+    let folder = if filepath.is_dir() {
+        filepath.clone()
+    } else {
+        filepath
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| format!("无法获取所在文件夹: {raw}"))?
+    };
+    if !folder.exists() {
+        return Err(format!("文件夹不存在: {}", folder.to_string_lossy()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        tokio::process::Command::new("explorer.exe")
+            .arg(folder.to_string_lossy().to_string())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        tokio::process::Command::new("open")
+            .arg(&folder)
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        tokio::process::Command::new("xdg-open")
+            .arg(&folder)
+            .spawn()
+            .map_err(|e| format!("打开文件夹失败: {e}"))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前系统不支持打开文件夹".into())
+}
+
+/// 删除图片文件
+#[tauri::command]
+pub async fn assistant_delete_image(id: String) -> Result<(), String> {
+    let dir = data_dir().join("images");
+    for ext in &["jpg", "png", "gif", "webp", "jpeg"] {
+        let path = dir.join(format!("{}.{}", id, ext));
+        if path.exists() {
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| format!("删除图片失败: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+// ── AI 助手工具 ──
+
+/// 执行 shell 命令，返回 stdout + stderr
+#[tauri::command]
+pub async fn assistant_exec(command: String, cwd: Option<String>) -> Result<String, String> {
+    let work_dir = cwd.unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    });
+
+    audit_log("EXEC", &format!("cmd={command} cwd={work_dir}"));
+
+    let output;
+
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        output = tokio::process::Command::new("cmd")
+            .args(["/c", &command])
+            .current_dir(&work_dir)
+            .env("PATH", super::enhanced_path())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .map_err(|e| format!("执行失败: {e}"))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        output = tokio::process::Command::new("sh")
+            .args(["-c", &command])
+            .current_dir(&work_dir)
+            .env("PATH", super::enhanced_path())
+            .output()
+            .await
+            .map_err(|e| format!("执行失败: {e}"))?;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let code = output.status.code().unwrap_or(-1);
+
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str("[stderr] ");
+        result.push_str(&stderr);
+    }
+    if result.is_empty() {
+        result = format!("(命令已执行，退出码: {code})");
+    } else if code != 0 {
+        result.push_str(&format!("\n(退出码: {code})"));
+    }
+
+    // 限制输出长度
+    if result.len() > 10000 {
+        result.truncate(10000);
+        result.push_str("\n...(输出已截断)");
+    }
+
+    Ok(result)
+}
+
+/// 读取文件内容
+#[tauri::command]
+pub async fn assistant_read_file(path: String) -> Result<String, String> {
+    audit_log("READ", &path);
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("读取文件失败 {path}: {e}"))?;
+
+    if content.len() > 50000 {
+        Ok(format!(
+            "{}...\n(文件内容已截断，共 {} 字节)",
+            &content[..50000],
+            content.len()
+        ))
+    } else {
+        Ok(content)
+    }
+}
+
+/// 写入文件
+#[tauri::command]
+pub async fn assistant_write_file(path: String, content: String) -> Result<String, String> {
+    audit_log("WRITE", &format!("{path} ({} bytes)", content.len()));
+    if let Some(parent) = PathBuf::from(&path).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+
+    tokio::fs::write(&path, &content)
+        .await
+        .map_err(|e| format!("写入文件失败 {path}: {e}"))?;
+
+    Ok(format!("已写入 {} ({} 字节)", path, content.len()))
+}
+
+/// 获取系统信息（OS、架构、主目录、主机名）
+#[tauri::command]
+pub async fn assistant_system_info() -> Result<String, String> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let home = dirs::home_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".into());
+    let shell = if cfg!(target_os = "windows") {
+        "powershell / cmd"
+    } else if cfg!(target_os = "macos") {
+        "zsh (macOS default)"
+    } else {
+        "bash / sh"
+    };
+
+    Ok(format!(
+        "OS: {}\nArch: {}\nHome: {}\nHostname: {}\nShell: {}\nPath separator: {}",
+        os,
+        arch,
+        home,
+        hostname,
+        shell,
+        std::path::MAIN_SEPARATOR
+    ))
+}
+
+/// 列出运行中的进程（按名称过滤）
+#[tauri::command]
+pub async fn assistant_list_processes(filter: Option<String>) -> Result<String, String> {
+    let output;
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        output = tokio::process::Command::new("tasklist")
+            .args(["/fo", "table"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        output = tokio::process::Command::new("ps")
+            .args(["aux", "--sort=-%mem"])
+            .output()
+            .await;
+    }
+
+    let output = output.map_err(|e| format!("获取进程列表失败: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        let lines: Vec<&str> = stdout
+            .lines()
+            .filter(|line| {
+                let lower = line.to_lowercase();
+                lower.contains(&f_lower)
+                    || lower.starts_with("id")
+                    || lower.starts_with("user")
+                    || lower.contains("---")
+            })
+            .collect();
+        if lines.len() <= 2 {
+            return Ok(format!("未找到匹配 '{}' 的进程", f));
+        }
+        Ok(lines.join("\n"))
+    } else {
+        // 无过滤时限制输出行数
+        let lines: Vec<&str> = stdout.lines().take(80).collect();
+        Ok(lines.join("\n"))
+    }
+}
+
+/// 检测端口是否在监听
+#[tauri::command]
+pub async fn assistant_check_port(port: u16) -> Result<String, String> {
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{}", port);
+    let result = std::net::TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| format!("地址解析失败: {e}"))?,
+        Duration::from_secs(2),
+    );
+
+    match result {
+        Ok(_stream) => {
+            // 尝试获取占用进程信息
+            let process_info = get_port_process(port).await;
+            Ok(format!(
+                "端口 {} 已被占用（正在监听）{}",
+                port, process_info
+            ))
+        }
+        Err(_) => Ok(format!("端口 {} 未被占用（空闲）", port)),
+    }
+}
+
+async fn get_port_process(port: u16) -> String {
+    let output;
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        output = tokio::process::Command::new("netstat")
+            .args(["-ano", "-p", "TCP"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        output = tokio::process::Command::new("lsof")
+            .args(["-i", &format!(":{}", port), "-t"])
+            .output()
+            .await;
+    }
+
+    match output {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            #[cfg(target_os = "windows")]
+            {
+                let port_token = format!(":{}", port);
+                let line = s
+                    .lines()
+                    .find(|line| {
+                        line.contains(&port_token)
+                            && line.to_ascii_uppercase().contains("LISTENING")
+                    })
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if line.is_empty() {
+                    return String::new();
+                }
+                format!("\n占用信息: {}", line)
+            }
+            #[cfg(not(target_os = "windows"))]
+            if s.is_empty() {
+                String::new()
+            } else {
+                format!("\n占用进程: {}", s)
+            }
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// 联网搜索（DuckDuckGo HTML）
+#[tauri::command]
+pub async fn assistant_web_search(
+    query: String,
+    max_results: Option<usize>,
+) -> Result<String, String> {
+    let max = max_results.unwrap_or(5);
+    let url = format!(
+        "https://html.duckduckgo.com/html/?q={}",
+        urlencoding::encode(&query)
+    );
+
+    let client = super::build_http_client(
+        std::time::Duration::from_secs(10),
+        Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+    )
+    .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    let html = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("搜索请求失败: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("读取搜索结果失败: {e}"))?;
+
+    // 解析搜索结果
+    let mut results = Vec::new();
+    let re_result = regex::Regex::new(
+        r#"class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)</a>"#
+    ).unwrap();
+
+    let re_strip_tags = regex::Regex::new(r"<[^>]+>").unwrap();
+
+    for cap in re_result.captures_iter(&html) {
+        if results.len() >= max {
+            break;
+        }
+        let raw_url = &cap[1];
+        let title = re_strip_tags.replace_all(&cap[2], "").trim().to_string();
+        let snippet = re_strip_tags.replace_all(&cap[3], "").trim().to_string();
+
+        // 解码 DuckDuckGo 的重定向 URL
+        let final_url = if let Some(pos) = raw_url.find("uddg=") {
+            let encoded = &raw_url[pos + 5..];
+            let end = encoded.find('&').unwrap_or(encoded.len());
+            urlencoding::decode(&encoded[..end])
+                .unwrap_or_else(|_| encoded[..end].into())
+                .to_string()
+        } else {
+            raw_url.to_string()
+        };
+
+        if !title.is_empty() && !final_url.is_empty() {
+            results.push((title, final_url, snippet));
+        }
+    }
+
+    if results.is_empty() {
+        return Ok(format!("搜索「{}」未找到相关结果。", query));
+    }
+
+    let mut output = format!("搜索「{}」找到 {} 条结果：\n\n", query, results.len());
+    for (i, (title, url, snippet)) in results.iter().enumerate() {
+        output.push_str(&format!(
+            "{}. **{}**\n   {}\n   {}\n\n",
+            i + 1,
+            title,
+            url,
+            snippet
+        ));
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "windows")]
+fn missav_resolve_overrides(host: &str) -> Option<&'static [&'static str]> {
+    match host.to_ascii_lowercase().as_str() {
+        "missav.live" => Some(&["104.26.6.107:443", "104.26.7.107:443", "172.67.72.106:443"]),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn missav_host(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    missav_resolve_overrides(&host).map(|_| host)
+}
+
+#[cfg(target_os = "windows")]
+async fn vod_fetch_missav_with_curl(
+    url: &str,
+    timeout: std::time::Duration,
+    user_agent: &str,
+) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let host = missav_host(url).ok_or_else(|| "非 MISSAV 允许域名".to_string())?;
+        let addrs = missav_resolve_overrides(&host)
+            .ok_or_else(|| "MISSAV 域名未配置解析覆盖".to_string())?;
+        let first_addr = addrs
+            .first()
+            .ok_or_else(|| "MISSAV 解析覆盖为空".to_string())?;
+        let ip = first_addr
+            .split(':')
+            .next()
+            .ok_or_else(|| "MISSAV 解析覆盖格式错误".to_string())?;
+        let max_time = timeout.as_secs().max(3).to_string();
+        let resolve_arg = format!("{host}:443:{ip}");
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let output = tokio::process::Command::new("curl.exe")
+            .args([
+                "-k",
+                "-L",
+                "-sS",
+                "--compressed",
+                "--max-time",
+                &max_time,
+                "--resolve",
+                &resolve_arg,
+                "-A",
+                user_agent,
+                "-H",
+                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "-H",
+                "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+                url,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .map_err(|e| format!("vod_fetch curl 启动失败: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "vod_fetch curl 失败: {}",
+                if stderr.is_empty() {
+                    output.status.to_string()
+                } else {
+                    stderr
+                }
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let client = build_vod_http_client(timeout, user_agent, url)?;
+        let resp = client
+            .get(url)
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7")
+            .send()
+            .await
+            .map_err(|e| format!("vod_fetch MISSAV 请求失败: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("vod_fetch MISSAV HTTP {}", resp.status()));
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("vod_fetch MISSAV 读取响应失败: {e}"))?;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn build_vod_http_client(
+    timeout: std::time::Duration,
+    user_agent: &str,
+    url: &str,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(timeout)
+        .gzip(true)
+        .user_agent(user_agent);
+
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        if let Some(host) = parsed.host_str().map(|h| h.to_ascii_lowercase()) {
+            if let Some(addrs) = missav_resolve_overrides(&host) {
+                let resolved = addrs
+                    .iter()
+                    .filter_map(|addr| addr.parse::<SocketAddr>().ok())
+                    .collect::<Vec<_>>();
+                if !resolved.is_empty() {
+                    builder = builder.resolve_to_addrs(&host, &resolved);
+                }
+            }
+        }
+    }
+
+    if let Some(proxy_url) = super::configured_proxy_url() {
+        let proxy_value = proxy_url.clone();
+        builder = builder.proxy(reqwest::Proxy::custom(move |target| {
+            let host = target.host_str().unwrap_or("");
+            if host.eq_ignore_ascii_case("missav.live") {
+                None
+            } else {
+                Some(proxy_value.clone())
+            }
+        }));
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("vod_fetch HTTP 客户端错误: {e}"))
+}
+
+/// 影视接口请求：使用 Rust HTTP 客户端，自动解压并按 UTF-8/GBK 解码。
+/// 旧实现依赖 PowerShell iwr，会在影视工具频繁搜索/播放时反复拉起 powershell.exe。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn vod_fetch(url: String, timeout_secs: Option<u64>) -> Result<String, String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL 必须以 http:// 或 https:// 开头".into());
+    }
+
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(30).clamp(3, 120));
+    let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+    let client = build_vod_http_client(timeout, user_agent, &url)?;
+
+    let send_request = |client: &reqwest::Client| {
+        client
+            .get(&url)
+            .header("Accept", "application/json, text/html, text/plain, */*")
+            .send()
+    };
+
+    let resp_result = send_request(&client).await;
+    let resp = match resp_result {
+        Ok(resp) => resp,
+        Err(first_err) => {
+            let tls_compatible = url.contains("103.194.185.51:51122")
+                || url.contains("43.248.100.69:51080")
+                || url.contains("www.ncat21.com");
+            if tls_compatible {
+                let insecure_client = reqwest::Client::builder()
+                    .timeout(timeout)
+                    .gzip(true)
+                    .user_agent(user_agent)
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .map_err(|e| format!("vod_fetch TLS 兼容客户端错误: {e}"))?;
+                send_request(&insecure_client).await.map_err(|e| {
+                    format!("vod_fetch 请求失败: {first_err}; TLS 兼容重试失败: {e}")
+                })?
+            } else if missav_host(&url).is_some() {
+                return vod_fetch_missav_with_curl(&url, timeout, user_agent).await;
+            } else {
+                return Err(format!("vod_fetch 请求失败: {first_err}"));
+            }
+        }
+    };
+
+    if !resp.status().is_success() {
+        if missav_host(&url).is_some() {
+            return vod_fetch_missav_with_curl(&url, timeout, user_agent).await;
+        }
+        return Err(format!("vod_fetch HTTP {}", resp.status()));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("vod_fetch 读取响应失败: {e}"))?;
+
+    let utf8 = String::from_utf8_lossy(&bytes).to_string();
+    let replacement_count = utf8.matches('\u{FFFD}').count();
+    if replacement_count > 0 {
+        let (decoded, _, had_errors) = encoding_rs::GBK.decode(&bytes);
+        if !had_errors || decoded.matches('\u{FFFD}').count() < replacement_count {
+            return Ok(decoded.into_owned());
+        }
+    }
+    Ok(utf8)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn napp03_api_fetch(
+    path: String,
+    query: Option<serde_json::Value>,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let clean_path = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
+    let is_allowed_logic_path = clean_path == "/vod/search/query";
+    if clean_path.contains("..") || (!clean_path.ends_with(".capi") && !is_allowed_logic_path) {
+        return Err("napp03_api_fetch 只允许 .capi 接口或已确认的搜索接口".into());
+    }
+
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(12).clamp(3, 60));
+    let client = super::build_http_client(
+        timeout,
+        Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
+    )
+    .map_err(|e| format!("napp03 HTTP 客户端错误: {e}"))?;
+
+    let params = query_to_pairs(query.as_ref())?;
+    let query_string = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let api_base = if is_allowed_logic_path {
+        "https://vlogic.zmizr.cn"
+    } else {
+        "https://vcache.zmizr.cn"
+    };
+    let api_url = if query_string.is_empty() {
+        format!("{api_base}{clean_path}")
+    } else {
+        format!("{api_base}{clean_path}?{query_string}")
+    };
+
+    let ts = chrono::Utc::now().timestamp_millis().to_string();
+    let device_id = "WteF-mqDn5fPmdAVIh4Jc";
+    let device_created_at = "1782931260400";
+    let st = "2";
+    let sorted_param = params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let sign_raw = format!(
+        "get|{clean_path}|{sorted_param}|{ts}|appId=ncat&deviceCreatedAt={device_created_at}&deviceId={device_id}&st={st}|"
+    );
+    let sign = hmac_sha1_hex("a1id2db7ced05pwnc323gezxyb", &sign_raw)?;
+
+    let resp = client
+        .get(&api_url)
+        .header("Accept", "application/octet-stream, application/json, */*")
+        .header("Referer", "https://a.napp03.com/")
+        .header("Origin", "https://a.napp03.com")
+        .header("os", "webapp")
+        .header("appId", "ncat")
+        .header("appVersion", "2.5.18")
+        .header("channelId", "c200000")
+        .header("package", "ncat")
+        .header("deviceId", device_id)
+        .header("deviceCreatedAt", device_created_at)
+        .header("st", st)
+        .header("ts", &ts)
+        .header("sign", sign)
+        .send()
+        .await
+        .map_err(|e| format!("napp03 请求失败: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("napp03 HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("napp03 读取响应失败: {e}"))?;
+    let plain = Aes256CbcDec::new(
+        b"ayt5wy5afwmwrpb19k9s3psx3dymyd0n".into(),
+        b"b3t069ijy7pirw0j".into(),
+    )
+    .decrypt_padded_vec_mut::<Pkcs7>(&bytes)
+    .map_err(|e| format!("napp03 解密失败: {e}"))?;
+    String::from_utf8(plain).map_err(|e| format!("napp03 UTF-8 解码失败: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn missav_json_escape(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn decode_missav_html_entities(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+#[cfg(target_os = "windows")]
+fn missav_html_text(value: &str) -> String {
+    let without_tags = regex::Regex::new(r"(?is)<[^>]+>")
+        .ok()
+        .map(|re| re.replace_all(value, " ").to_string())
+        .unwrap_or_else(|| value.to_string());
+    decode_missav_html_entities(&without_tags)
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(target_os = "windows")]
+fn is_missav_allowed_nav_path(path: &str) -> bool {
+    let p = path.trim_end_matches('/');
+    if p.is_empty() || p == "/" {
+        return true;
+    }
+    if p.contains("/vip")
+        || p.contains("/login")
+        || p.contains("/register")
+        || p.contains("/signup")
+        || p.contains("/logout")
+        || p.contains("/cdn-cgi")
+        || p.contains("/upload")
+    {
+        return false;
+    }
+    p == "/actresses"
+        || p == "/actresses/ranking"
+        || p == "/genres"
+        || p == "/makers"
+        || p == "/saved"
+        || p == "/playlists"
+        || p == "/history"
+        || p == "/saved/actresses"
+        || p == "/klive"
+        || p == "/clive"
+        || p.starts_with("/dm")
+        || p.starts_with("/genres/")
+        || p.starts_with("/makers/")
+        || p.starts_with("/actresses/")
+}
+
+#[cfg(target_os = "windows")]
+fn missav_nav_name_from_path(path: &str) -> String {
+    let tail = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim();
+    let cleaned = tail.split('?').next().unwrap_or(tail);
+    urlencoding::decode(cleaned)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| cleaned.to_string())
+        .replace('-', " ")
+}
+
+#[cfg(target_os = "windows")]
+fn parse_missav_cards_json(html: &str, base_url: &str) -> Result<serde_json::Value, String> {
+    let anchor_re = regex::Regex::new(r#"(?is)<a\b([^>]*)>(.*?)</a>"#)
+        .map_err(|e| format!("MISSAV 链接正则错误: {e}"))?;
+    let href_re = regex::Regex::new(r#"(?is)href=["']([^"']+)["']"#)
+        .map_err(|e| format!("MISSAV href 正则错误: {e}"))?;
+    let img_tag_re = regex::Regex::new(r#"(?is)<img\b[^>]*>"#)
+        .map_err(|e| format!("MISSAV 图片标签正则错误: {e}"))?;
+    let img_src_re =
+        regex::Regex::new(r#"(?is)\b(data-src|data-original|src)=['\"]([^'\"]+)['\"]"#)
+            .map_err(|e| format!("MISSAV 图片地址正则错误: {e}"))?;
+    let img_alt_re = regex::Regex::new(r#"(?is)<img\b[^>]*alt=["']([^"']+)["'][^>]*>"#)
+        .map_err(|e| format!("MISSAV 图片标题正则错误: {e}"))?;
+    let duration_re =
+        regex::Regex::new(r#"(?is)<span\b[^>]*>(\s*\d{1,2}:\d{2}(?::\d{2})?\s*)</span>"#)
+            .map_err(|e| format!("MISSAV 时长正则错误: {e}"))?;
+    let video_re = regex::Regex::new(
+        r#"(?is)(?:data-src|src|href)=[\"']([^\"']+\.(?:m3u8|mp4)(?:[^\"']*)?)[\"']"#,
+    )
+    .map_err(|e| format!("MISSAV 视频正则错误: {e}"))?;
+    let direct_video_re =
+        regex::Regex::new(r#"(?is)https?://[^'\"<>\\]+\.(?:m3u8|mp4)(?:[^'\"<>\\]*)?"#)
+            .map_err(|e| format!("MISSAV 明文视频正则错误: {e}"))?;
+    let packed_video_re = regex::Regex::new(r#"(?is)eval\(function\(p,a,c,k,e,d\).*?\('((?:\\'|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']*)'\.split\('\|'\)"#)
+        .map_err(|e| format!("MISSAV packed 视频正则错误: {e}"))?;
+    let page_re = regex::Regex::new(r#"(?is)<a\b([^>]*)>(.*?)</a>"#)
+        .map_err(|e| format!("MISSAV 分页正则错误: {e}"))?;
+
+    let base = reqwest::Url::parse(base_url).map_err(|e| format!("MISSAV base URL 错误: {e}"))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    let mut category_seen = std::collections::HashSet::new();
+    let mut categories = Vec::new();
+    let mut channel_seen = std::collections::HashSet::new();
+    let mut channels = Vec::new();
+    let mut play_seen = std::collections::HashSet::new();
+    let mut play_urls = Vec::new();
+    let mut page_seen = std::collections::HashSet::new();
+    let mut pages = Vec::new();
+
+    for cap in page_re.captures_iter(html).take(500) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let href_raw = href_re
+            .captures(attrs)
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim()))
+            .unwrap_or("");
+        if !href_raw.contains("page=") {
+            continue;
+        }
+        let url = match base.join(href_raw) {
+            Ok(url) => url,
+            Err(_) => continue,
+        };
+        if url.host_str() != Some("missav.live") {
+            continue;
+        }
+        let label = missav_html_text(cap.get(2).map(|m| m.as_str()).unwrap_or(""));
+        let page_num = url
+            .query_pairs()
+            .find(|(k, _)| k == "page")
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_default();
+        let name = if label.is_empty() {
+            format!("第 {page_num} 页")
+        } else {
+            label
+        };
+        let path = if let Some(q) = url.query() {
+            format!("{}?{}", url.path(), q)
+        } else {
+            url.path().to_string()
+        };
+        if page_seen.insert(path.clone()) {
+            pages.push(serde_json::json!({ "name": name, "path": path, "url": url.to_string() }));
+        }
+    }
+
+    for cap in direct_video_re.find_iter(html).take(30) {
+        let url = cap.as_str().trim().to_string();
+        if play_seen.insert(url.clone()) {
+            let name = if url.to_ascii_lowercase().contains("preview") {
+                "预览"
+            } else {
+                "播放地址"
+            };
+            play_urls.push(serde_json::json!({ "name": name, "url": url }));
+        }
+    }
+
+    let token_re = regex::Regex::new(r#"\b[0-9a-z]+\b"#)
+        .map_err(|e| format!("MISSAV packed token 正则错误: {e}"))?;
+    for cap in packed_video_re.captures_iter(html).take(10) {
+        let payload = cap
+            .get(1)
+            .map(|m| m.as_str())
+            .unwrap_or("")
+            .replace("\\'", "'")
+            .replace("\\/", "/");
+        let radix = cap
+            .get(2)
+            .and_then(|m| m.as_str().parse::<u32>().ok())
+            .unwrap_or(36)
+            .clamp(2, 36);
+        let words = cap
+            .get(4)
+            .map(|m| m.as_str())
+            .unwrap_or("")
+            .split('|')
+            .collect::<Vec<_>>();
+        let unpacked = token_re
+            .replace_all(&payload, |caps: &regex::Captures| {
+                let token = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+                match usize::from_str_radix(token, radix)
+                    .ok()
+                    .and_then(|idx| words.get(idx))
+                    .filter(|v| !v.is_empty())
+                {
+                    Some(value) => value.to_string(),
+                    None => token.to_string(),
+                }
+            })
+            .to_string();
+        for video in direct_video_re.find_iter(&unpacked).take(10) {
+            let url = video.as_str().trim().to_string();
+            if play_seen.insert(url.clone()) {
+                let lower = url.to_ascii_lowercase();
+                let name = if lower.contains("1080p") || lower.contains("source1280") {
+                    "1080P"
+                } else if lower.contains("720p") || lower.contains("source842") {
+                    "720P"
+                } else if lower.contains("preview") {
+                    "预览"
+                } else {
+                    "播放地址"
+                };
+                play_urls.push(serde_json::json!({ "name": name, "url": url }));
+            }
+        }
+    }
+
+    for cap in video_re.captures_iter(html).take(30) {
+        let raw = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+        if raw.is_empty() {
+            continue;
+        }
+        let url = base
+            .join(raw)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| raw.to_string());
+        if play_seen.insert(url.clone()) {
+            let name = if url.to_ascii_lowercase().contains("preview") {
+                "预览"
+            } else {
+                "播放地址"
+            };
+            play_urls.push(serde_json::json!({ "name": name, "url": url }));
+        }
+    }
+
+    for cap in anchor_re.captures_iter(html).take(3000) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let href_raw = href_re
+            .captures(attrs)
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim()))
+            .unwrap_or("");
+        let mut text = missav_html_text(cap.get(2).map(|m| m.as_str()).unwrap_or(""));
+        let url = match base.join(href_raw) {
+            Ok(url) => url.to_string(),
+            Err(_) => continue,
+        };
+        if !url.starts_with("https://missav.live/") || category_seen.contains(&url) {
+            continue;
+        }
+        let path = reqwest::Url::parse(&url)
+            .ok()
+            .map(|u| u.path().to_string())
+            .unwrap_or_default();
+        if path.contains("/genres/")
+            || path.contains("/makers/")
+            || path.contains("/actresses/")
+            || path == "/genres/VR"
+        {
+            if path == base.path() {
+                continue;
+            }
+            if text.is_empty() || text.contains("條影片") || text.len() > 80 {
+                text = missav_nav_name_from_path(&path);
+            }
+            let blocked_category_text = text.is_empty()
+                || text.contains("條影片")
+                || text.chars().all(|c| c.is_ascii_digit())
+                || [
+                    "註冊",
+                    "注册",
+                    "简体中文",
+                    "繁體中文",
+                    "所有",
+                    "單人作品",
+                    "多人作品",
+                    "中文字幕",
+                    "發行日期",
+                    "发行日期",
+                    "最近更新",
+                    "收藏數",
+                    "收藏数",
+                    "今日瀏覽數",
+                    "今日浏览数",
+                    "本週瀏覽數",
+                    "本周浏览数",
+                    "本月瀏覽數",
+                    "本月浏览数",
+                    "總瀏覽數",
+                    "总浏览数",
+                    "下一頁",
+                    "下一页",
+                ]
+                .iter()
+                .any(|bad| text.contains(bad));
+            if blocked_category_text {
+                continue;
+            }
+            let entry = serde_json::json!({
+                "name": text,
+                "path": path,
+                "url": url,
+            });
+            if category_seen.insert(url.clone()) {
+                categories.push(entry.clone());
+            }
+            if channel_seen.insert(url.clone()) {
+                channels.push(entry);
+            }
+        } else if is_missav_allowed_nav_path(&path) {
+            if text.is_empty() || text.contains("條影片") || text.len() > 80 {
+                text = missav_nav_name_from_path(&path);
+            }
+            if text.is_empty() || text.contains("條影片") {
+                continue;
+            }
+            if channel_seen.insert(url.clone()) {
+                channels.push(serde_json::json!({
+                    "name": text,
+                    "path": path,
+                    "url": url,
+                }));
+            }
+        }
+    }
+
+    for cap in anchor_re.captures_iter(html).take(3000) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if !attrs.contains("text-secondary") {
+            continue;
+        }
+        let href_raw = href_re
+            .captures(attrs)
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim()))
+            .unwrap_or("");
+        let title_raw = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let url = match base.join(href_raw) {
+            Ok(url) => url.to_string(),
+            Err(_) => continue,
+        };
+        if !url.starts_with("https://missav.live/") || !seen.insert(url.clone()) {
+            continue;
+        }
+
+        let start = cap.get(0).map(|m| m.start()).unwrap_or(0);
+        let mut context_start = start.saturating_sub(5000);
+        while context_start < start && !html.is_char_boundary(context_start) {
+            context_start += 1;
+        }
+        let context_end = cap.get(0).map(|m| m.end()).unwrap_or(start);
+        let context = &html[context_start..context_end];
+
+        let pic_raw = img_tag_re
+            .find_iter(context)
+            .filter_map(|tag| {
+                let attrs = img_src_re
+                    .captures_iter(tag.as_str())
+                    .filter_map(|c| {
+                        Some((
+                            c.get(1)?.as_str().to_ascii_lowercase(),
+                            c.get(2)?.as_str().trim().to_string(),
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                attrs
+                    .iter()
+                    .find(|(k, v)| {
+                        (k == "data-src" || k == "data-original")
+                            && !v.starts_with("data:")
+                            && !v.is_empty()
+                    })
+                    .or_else(|| {
+                        attrs
+                            .iter()
+                            .find(|(_, v)| !v.starts_with("data:") && !v.is_empty())
+                    })
+                    .map(|(_, v)| v.clone())
+            })
+            .last()
+            .unwrap_or_default();
+        let pic = if pic_raw.is_empty() {
+            String::new()
+        } else {
+            base.join(&pic_raw)
+                .map(|u| u.to_string())
+                .unwrap_or(pic_raw)
+        };
+
+        let title = {
+            let text = missav_html_text(title_raw);
+            if !text.is_empty() {
+                text
+            } else {
+                img_alt_re
+                    .captures_iter(context)
+                    .last()
+                    .and_then(|c| c.get(1).map(|m| missav_html_text(m.as_str())))
+                    .unwrap_or_default()
+            }
+        };
+        if title.is_empty() || title.to_ascii_lowercase().contains("missav") {
+            continue;
+        }
+        let duration = duration_re
+            .captures_iter(context)
+            .last()
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+            .unwrap_or_else(|| "MISSAV".to_string());
+        let id = url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(&url)
+            .to_string();
+        items.push(serde_json::json!({
+            "vod_id": id,
+            "vod_name": title,
+            "vod_pic": pic,
+            "vod_remarks": duration,
+            "type_name": duration,
+            "vod_content": title,
+            "detail_url": url,
+        }));
+    }
+
+    let total = items.len();
+    Ok(
+        serde_json::json!({ "list": items, "total": total, "categories": categories, "channels": channels, "pages": pages, "play_urls": play_urls }),
+    )
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn missav_api_fetch(
+    path: String,
+    query: Option<serde_json::Value>,
+    timeout_secs: Option<u64>,
+) -> Result<String, String> {
+    let (clean_path, embedded_query) =
+        if path.starts_with("http://") || path.starts_with("https://") {
+            let parsed = reqwest::Url::parse(&path).map_err(|e| format!("MISSAV URL 错误: {e}"))?;
+            if parsed.host_str() != Some("missav.live") {
+                return Err("MISSAV 只允许官网 missav.live".to_string());
+            }
+            (
+                parsed.path().to_string(),
+                parsed.query().map(|q| q.to_string()),
+            )
+        } else {
+            let raw = if path.starts_with('/') {
+                path
+            } else {
+                format!("/{path}")
+            };
+            if let Some((path_part, query_part)) = raw.split_once('?') {
+                (path_part.to_string(), Some(query_part.to_string()))
+            } else {
+                (raw, None)
+            }
+        };
+    if clean_path.contains("..") {
+        return Err("MISSAV path 不允许包含 ..".to_string());
+    }
+
+    let mut url = reqwest::Url::parse("https://missav.live").map_err(|e| e.to_string())?;
+    url.set_path(&clean_path);
+    if let Some(query_string) = embedded_query.as_deref() {
+        url.set_query(Some(query_string));
+    }
+    if let Some(obj) = query.as_ref().and_then(|v| v.as_object()) {
+        for (key, val) in obj {
+            let value = val
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| val.to_string());
+            url.query_pairs_mut().append_pair(key, &value);
+        }
+    }
+
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(30).clamp(5, 120));
+    let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+    let html = match build_vod_http_client(timeout, user_agent, url.as_str()) {
+        Ok(client) => {
+            match client
+                .get(url.as_str())
+                .header(
+                    "Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                )
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7")
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => resp
+                    .bytes()
+                    .await
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
+                    .map_err(|e| format!("MISSAV 读取响应失败: {e}"))?,
+                Ok(resp) => vod_fetch_missav_with_curl(url.as_str(), timeout, user_agent)
+                    .await
+                    .map_err(|e| format!("MISSAV HTTP {}，curl 兜底也失败: {e}", resp.status()))?,
+                Err(_) => vod_fetch_missav_with_curl(url.as_str(), timeout, user_agent).await?,
+            }
+        }
+        Err(_) => vod_fetch_missav_with_curl(url.as_str(), timeout, user_agent).await?,
+    };
+    if html.contains("Just a moment") || html.contains("cf-challenge") {
+        return Err("MISSAV 官网返回 Cloudflare 防护页".to_string());
+    }
+    let data = parse_missav_cards_json(&html, url.as_str())?;
+    Ok(format!(
+        "{{\"code\":200,\"message\":\"ok\",\"source\":{},\"data\":{}}}",
+        missav_json_escape(url.as_str()),
+        data
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn query_to_pairs(query: Option<&serde_json::Value>) -> Result<Vec<(String, String)>, String> {
+    let mut pairs = Vec::new();
+    if let Some(value) = query {
+        let obj = value
+            .as_object()
+            .ok_or_else(|| "query 必须是对象".to_string())?;
+        for (key, val) in obj {
+            if key.is_empty() {
+                continue;
+            }
+            let text = match val {
+                serde_json::Value::Null => String::new(),
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => return Err(format!("query.{key} 只允许字符串/数字/布尔")),
+            };
+            pairs.push((key.clone(), text));
+        }
+    }
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(pairs)
+}
+
+#[cfg(target_os = "windows")]
+fn hmac_sha1_hex(key: &str, data: &str) -> Result<String, String> {
+    let mut mac =
+        HmacSha1::new_from_slice(key.as_bytes()).map_err(|e| format!("HMAC key 错误: {e}"))?;
+    mac.update(data.as_bytes());
+    let bytes = mac.finalize().into_bytes();
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// 抓取 URL 内容（通过 Jina Reader API）
+#[tauri::command]
+pub async fn assistant_fetch_url(url: String) -> Result<String, String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL 必须以 http:// 或 https:// 开头".into());
+    }
+
+    let jina_url = format!("https://r.jina.ai/{}", url);
+    let client = super::build_http_client(std::time::Duration::from_secs(15), Some("Mozilla/5.0"))
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    let content = client
+        .get(&jina_url)
+        .header("Accept", "text/plain")
+        .send()
+        .await
+        .map_err(|e| format!("抓取失败: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("读取内容失败: {e}"))?;
+
+    if content.len() > 100_000 {
+        Ok(format!(
+            "{}\n\n[内容已截断，超过 100KB 限制]",
+            &content[..100_000]
+        ))
+    } else if content.is_empty() {
+        Ok("（页面内容为空）".into())
+    } else {
+        Ok(content)
+    }
+}
+
+/// 爬虫用：抓取任意网页 HTML
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn fetch_page(url: String) -> Result<String, String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL 必须以 http:// 或 https:// 开头".into());
+    }
+    let client = super::build_http_client(
+        std::time::Duration::from_secs(15),
+        Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
+    ).map_err(|e| format!("HTTP 客户端错误: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Accept", "text/html,application/xhtml+xml,*/*")
+        .header("Accept-Language", "zh-CN,zh;q=0.9")
+        .send()
+        .await
+        .map_err(|e| format!("fetch_page 请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("fetch_page HTTP {}", resp.status()));
+    }
+    resp.text()
+        .await
+        .map_err(|e| format!("fetch_page 读取响应失败: {e}"))
+}
+
+/// 使用 WebView2/Edge 渲染 JS 页面，提取视频 URL（用于 JS 动态渲染站）
+/// 策略：Edge headless + Chrome DevTools Protocol (CDP)
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn fetch_page_js(url: String) -> Result<String, String> {
+    use std::process::Command;
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL 必须以 http:// 或 https:// 开头".into());
+    }
+
+    // Edge 通常在这里
+    let msedge_paths = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Windows\System32\msedge.exe",
+    ];
+    let msedge_exe = msedge_paths
+        .iter()
+        .find(|p| std::path::Path::new(p).exists());
+    let browser_exe = msedge_exe.copied().unwrap_or("");
+
+    // 用 CDP 的提取脚本（含第3层 PerfAPI + 第4层 fetch/XHR/WS 拦截）
+    let extract_js = r#"
+(function() {
+    // ★ 第4层：fetch/XHR/WebSocket 拦截
+    if (!window.__tulu_cdp_hooked) {
+      window.__tulu_cdp_hooked = true;
+      window.__fetchUrls = window.__fetchUrls || [];
+      window.__xhrUrls = window.__xhrUrls || [];
+      window.__wsUrls = window.__wsUrls || [];
+      try { var _f=window.fetch; window.fetch=function(){var u=arguments[0];window.__fetchUrls.push(typeof u==='string'?u:(u&&u.url)||'');return _f.apply(this,arguments);}; } catch(e){}
+      try { var _x=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(m,url){window.__xhrUrls.push(url);return _x.apply(this,arguments);}; } catch(e){}
+      try { var _w=window.WebSocket; window.WebSocket=function(url,p){window.__wsUrls.push(url);return p!==undefined?new _w(url,p):new _w(url);}; window.WebSocket.prototype=_w.prototype; } catch(e){}
+    }
+    var r = [];
+    var seen = new Set();
+    function add(u, n, t) {
+        if (!u || seen.has(u)) return;
+        seen.add(u);
+        r.push({url: u, name: n || u.split('/').pop().replace(/\.[^.]+$/,''), type: t || 'unknown'});
+    }
+    // video / source
+    document.querySelectorAll('video').forEach(function(v) {
+        add(v.src, 'video.src', 'video');
+        v.querySelectorAll('source').forEach(function(s) { add(s.src, 'source.src', 'video'); });
+    });
+    // a[href] with m3u8/mp4
+    document.querySelectorAll('a[href]').forEach(function(a) {
+        var h = a.getAttribute('href');
+        if (h && (h.includes('.m3u8') || h.includes('.mp4'))) add(h, a.textContent.trim().slice(0,40) || 'link', 'a.href');
+    });
+    // data-url / data-src
+    document.querySelectorAll('[data-url]').forEach(function(el) { add(el.getAttribute('data-url'), 'data-url', 'data-url'); });
+    document.querySelectorAll('[data-src]').forEach(function(el) { add(el.getAttribute('data-src'), 'data-src', 'data-src'); });
+    document.querySelectorAll('[data-play]').forEach(function(el) { add(el.getAttribute('data-play'), 'data-play', 'data-play'); });
+    // script text with m3u8/mp4
+    var scripts = document.querySelectorAll('script');
+    for (var i=0; i<scripts.length; i++) {
+        var txt = scripts[i].textContent;
+        var m;
+        var re = /(?:https?:)?[^\s\"\'<>]+\.(?:m3u8|mp4)[^\s\"\'<>]*/gi;
+        while ((m = re.exec(txt)) !== null) { add(m[0], 'script.m3u8mp4', 'script'); }
+        // player_xxxx = {...}
+        var pm = txt.match(/var\s+\w+\s*=\s*(\{[^;]+\})/gi);
+        if (pm) {
+            for (var j=0; j<pm.length; j++) {
+                var u = (pm[j].match(/"url"\s*:\s*"([^"]+)"/) || ['',''])[1];
+                if (u) {
+                    u = u.replace(/\\\//g,'/').replace(/\\u([0-9a-f]{2})/gi, function(_,h){return String.fromCharCode(parseInt(h,16));});
+                    add(u, 'player.var', 'player');
+                }
+            }
+        }
+    }
+    // iframe src
+    document.querySelectorAll('iframe').forEach(function(f) {
+        var s = f.src;
+        if (s && !s.startsWith('about:') && !s.startsWith('javascript:')) add(s, 'iframe.src', 'iframe');
+        var ds = f.getAttribute('data-src');
+        if (ds) add(ds, 'iframe.data-src', 'iframe');
+    });
+    // ★ 第3层：Performance API 网络请求拦截
+    // 捕获页面加载期间的所有 m3u8/mp4/mpd/flv/m4s 网络请求
+    try {
+        var perfEntries = performance.getEntriesByType('resource');
+        for (var i=0; i<perfEntries.length; i++) {
+            var entry = perfEntries[i];
+            var url = entry.name;
+            if (!url) continue;
+            var lower = url.toLowerCase();
+            if (lower.indexOf('.m3u8') !== -1) add(url, entry.initiatorType + '.m3u8', 'network');
+            else if (lower.indexOf('.mp4') !== -1) add(url, entry.initiatorType + '.mp4', 'network');
+            else if (lower.indexOf('.mpd') !== -1) add(url, entry.initiatorType + '.dash', 'network');
+            else if (lower.indexOf('.flv') !== -1) add(url, entry.initiatorType + '.flv', 'network');
+            else if (lower.indexOf('.m4s') !== -1) add(url, entry.initiatorType + '.m4s', 'network');
+            else if (lower.indexOf('.ts') !== -1) add(url, entry.initiatorType + '.ts', 'network');
+        }
+    } catch(e) {}
+    // ★ 拦截 fetch/XHR（运行时动态请求）
+    try {
+        if (window.__fetchUrls) {
+            window.__fetchUrls.forEach(function(u) { add(u, 'fetch', 'network'); });
+        }
+        if (window.__xhrUrls) {
+            window.__xhrUrls.forEach(function(u) { add(u, 'xhr', 'network'); });
+        }
+        if (window.__wsUrls) {
+            window.__wsUrls.forEach(function(u) { add(u, 'ws', 'network'); });
+        }
+    } catch(e) {}
+    return JSON.stringify(r);
+})()"#;
+
+    // Base64 编码避免转义问题
+    let extract_b64 = base64::engine::general_purpose::STANDARD.encode(extract_js);
+
+    let ps = format!(
+        r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$json = ""
+
+# Edge DevTools Protocol - 启动临时用户目录避免冲突
+$tmpDir = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+
+$dbgPort = {port}
+$userDirArg = "--user-data-dir=`"$tmpDir`""
+
+# 启动 Edge headless + CDP
+$proc = Start-Process '{browser}' -ArgumentList "--headless=new","--no-sandbox","--disable-gpu","--remote-debugging-port=$dbgPort",$userDirArg,'{url}' -PassThru -WindowStyle Hidden
+
+Start-Sleep 3
+
+try {{
+    # CDP: 获取 target 列表
+    $jsonUrl = "http://localhost:$dbgPort/json"
+    $resp = Invoke-RestMethod $jsonUrl -TimeoutSec 5 -ErrorAction Stop
+    if (-not $resp) {{ throw "CDP: 无法获取 target" }}
+
+    $target = ($resp | Select-Object -First 1)
+    if (-not $target.id) {{ throw "CDP: 未找到 target id" }}
+
+    # CDP WebSocket URL
+    $wsUrl = $target.webSocketDebuggerUrl
+    if (-not $wsUrl) {{ throw "CDP: 未获取 websocket URL" }}
+
+    $ws = New-Object System.Net.WebSockets.ClientWebSocket
+    $ct = [Threading.CancellationToken]::None
+    $ws.ConnectAsync($wsUrl, $ct).Wait(5000)
+    if ($ws.State -ne 'Open') {{ throw "CDP: websocket 连接失败" }}
+
+    # 启用 Runtime
+    $ws.SendAsync([ArraySegment[byte]][Text.Encoding]::UTF8.GetBytes('{{"id":1,"method":"Runtime.enable"}}'), 'Text', $true, $ct).Wait(1000)
+
+    # 等 JS 执行
+    Start-Sleep -Seconds 3
+
+    # 执行提取脚本
+    $scriptB64 = '{extract_b64}'
+    $evalCmd = '{{"id":10,"method":"Runtime.evaluate","params":{{"expression":"eval(atob(`\"" + $scriptB64 + "`\"))","returnByValue":true}}}}'
+    $ws.SendAsync([ArraySegment[byte]][Text.Encoding]::UTF8.GetBytes($evalCmd), 'Text', $true, $ct).Wait(5000)
+
+    # 读取结果
+    $buf = [byte[]]::new(16384)
+    $result = $ws.ReceiveAsync([ArraySegment[byte]]$buf, $ct).Wait(8000)
+    if ($result.Count -gt 0) {{
+        $json = [Text.Encoding]::UTF8.GetString($buf, 0, $result.Count)
+    }}
+
+    $ws.CloseAsync('NormalClosure', '', $ct).Wait(1000)
+
+    if ($json -match 'JS_OK:') {{
+        $json = ($json -split 'JS_OK:')[1]
+        Write-Output ("JS_OK:" + $json)
+    }} elseif ($json -match '"result":{{"value":') {{
+        Write-Output ("JS_OK:" + ($json -split '"value":')[1].TrimEnd('}}'))
+    }} else {{
+        Write-Output "JS_EMPTY"
+    }}
+}} catch {{
+    Write-Output ("JS_ERROR:" + $_.Exception.Message)
+}} finally {{
+    if ($proc -and -not $proc.HasExited) {{ Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue }}
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+}}
+"#,
+        browser = browser_exe,
+        url = url,
+        port = 9222,
+        extract_b64 = extract_b64
+    );
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .creation_flags(0x08000000)
+        .output()
+        .map_err(|e| format!("PowerShell 执行失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        return Err(format!("fetch_page_js 失败: {}", stderr.trim()));
+    }
+
+    let out = stdout.trim();
+    if let Some(pos) = out.find("JS_OK:") {
+        let json_str = &out[pos + 7..];
+        Ok(json_str.to_string())
+    } else if out.starts_with("JS_EMPTY") {
+        Ok("[]".to_string())
+    } else if let Some(stripped) = out.strip_prefix("JS_ERROR:") {
+        Err(format!("fetch_page_js 错误: {}", stripped.trim()))
+    } else {
+        Err(format!("fetch_page_js 未返回有效结果: {}", out))
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn movie_player_report_progress(
+    app: tauri::AppHandle,
+    url: String,
+    title: String,
+    current_time: f64,
+    duration: f64,
+    playback_ctx: String,
+) -> Result<String, String> {
+    let playback_ctx_value = serde_json::from_str::<serde_json::Value>(&playback_ctx)
+        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    let payload = serde_json::json!({
+        "type": "playerProgress",
+        "url": url,
+        "title": title,
+        "currentTime": current_time,
+        "duration": duration,
+        "playbackCtx": playback_ctx_value,
+    });
+    persist_player_progress(&payload)?;
+    let _ = app.emit("player-event", payload);
+    Ok(format!(
+        "saved:{current_time:.2}:{}",
+        player_progress_store_path().display()
+    ))
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn movie_player_get_resume(_url: String, _playback_ctx: String) -> Result<f64, String> {
+    Ok(0.0)
+}
+
+/// 独立播放器进度回写桥：由 player.html invoke，后端持久化进度并广播给主窗口。
+/// 这样不依赖 file:// 播放器窗口里的前端 event 权限或 opener 关系。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn player_report_event(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    persist_player_progress(&payload)?;
+    app.emit("player-event", payload)
+        .map_err(|e| format!("广播播放器事件失败: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn player_progress_store_path() -> PathBuf {
+    data_dir().join("player-progress.json")
+}
+
+#[cfg(target_os = "windows")]
+fn player_progress_key(ctx: Option<&serde_json::Value>, url: Option<&str>) -> Option<String> {
+    if let Some(ctx) = ctx {
+        let id = ctx.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let source = ctx.get("source").and_then(|v| v.as_str()).unwrap_or("");
+        let ep_name = ctx.get("epName").and_then(|v| v.as_str()).unwrap_or("");
+        if !id.is_empty() && !source.is_empty() {
+            return Some(format!("ctx|{source}|{id}|{ep_name}"));
+        }
+    }
+    url.filter(|value| !value.is_empty())
+        .map(|value| format!("url|{value}"))
+}
+
+#[cfg(target_os = "windows")]
+fn read_player_progress_store() -> serde_json::Map<String, serde_json::Value> {
+    let path = player_progress_store_path();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "windows")]
+fn write_player_progress_store(
+    store: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let path = player_progress_store_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建播放器进度目录失败: {e}"))?;
+    }
+    let text =
+        serde_json::to_string_pretty(store).map_err(|e| format!("序列化播放器进度失败: {e}"))?;
+    std::fs::write(path, text).map_err(|e| format!("写入播放器进度失败: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn persist_player_progress(payload: &serde_json::Value) -> Result<(), String> {
+    if payload.get("type").and_then(|v| v.as_str()) != Some("playerProgress") {
+        return Ok(());
+    }
+    let current_time = payload
+        .get("currentTime")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    if current_time <= 5.0 || (current_time - 999.0).abs() < f64::EPSILON {
+        return Ok(());
+    }
+    let key = player_progress_key(
+        payload.get("playbackCtx"),
+        payload.get("url").and_then(|v| v.as_str()),
+    )
+    .ok_or_else(|| "播放器进度缺少可用 key".to_string())?;
+    let mut item = payload.clone();
+    if let Some(obj) = item.as_object_mut() {
+        obj.insert(
+            "updatedAt".to_string(),
+            serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
+        );
+    }
+    let mut store = read_player_progress_store();
+    store.insert(key, item);
+    write_player_progress_store(&store)
+}
+
+/// 打开独立播放器窗口（Tauri 内嵌窗口，不影响主界面）
+#[cfg(target_os = "windows")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn open_player_window(
+    app: tauri::AppHandle,
+    url: String,
+    title: String,
+    _resume: f64,
+    lang: String,
+    all_eps: String,
+    all_urls: String,
+    all_lines: String,
+    playback_ctx: String,
+    pic: String,
+) -> Result<String, String> {
+    use tauri::WebviewUrl;
+    use tauri::WebviewWindowBuilder;
+
+    if url.is_empty() {
+        return Err("视频URL不能为空".into());
+    }
+
+    // 保持 file:// 播放器入口：很多影视线路依赖 file:// WebView 的宽松来源环境。
+    // 播放器只负责播放和上报观看进度。
+    let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    let base_dir = exe_path
+        .parent()
+        .ok_or_else(|| String::from("无法获取程序目录"))?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| base_dir.to_path_buf());
+    let mut html_candidates = vec![
+        cwd.join("src").join("player.html"),
+        cwd.join("src-tauri").join("resources").join("player.html"),
+        cwd.join("src-tauri").join("player.html"),
+        cwd.join("player.html"),
+        base_dir.join("src").join("player.html"),
+        base_dir.join("player.html"),
+        base_dir.join("resources").join("player.html"),
+    ];
+    if let Ok(res_dir) = app.path().resource_dir() {
+        html_candidates.push(res_dir.join("src").join("player.html"));
+        html_candidates.push(res_dir.join("player.html"));
+    }
+    let html_path = html_candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "未找到播放器文件 player.html，已查找: {}",
+                html_candidates
+                    .iter()
+                    .map(|p| p.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            )
+        })?;
+
+    // 构建 player.html URL 参数
+    let encoded_url = urlencoding_encode(&url);
+    let encoded_title = urlencoding_encode(&title);
+    let encoded_alleps = urlencoding_encode(&all_eps);
+    let encoded_allurls = urlencoding_encode(&all_urls);
+    let encoded_alllines = urlencoding_encode(&all_lines);
+    let encoded_lang = urlencoding_encode(&lang);
+    let encoded_ctx = urlencoding_encode(&playback_ctx);
+    let encoded_pic = urlencoding_encode(&pic);
+
+    let effective_resume = 0.0;
+
+    let player_url = if url.starts_with("tauri://localhost/hls-proxy") {
+        format!(
+            "player.html?url={}&title={}&resume={}&lang={}&all_eps={}&all_urls={}&all_lines={}&playback_ctx={}&pic={}",
+            encoded_url,
+            encoded_title,
+            effective_resume,
+            encoded_lang,
+            encoded_alleps,
+            encoded_allurls,
+            encoded_alllines,
+            encoded_ctx,
+            encoded_pic,
+        )
+    } else {
+        format!(
+            "file:///{}?url={}&title={}&resume={}&lang={}&all_eps={}&all_urls={}&all_lines={}&playback_ctx={}&pic={}",
+            html_path.to_string_lossy().replace('\\', "/"),
+            encoded_url,
+            encoded_title,
+            effective_resume,
+            encoded_lang,
+            encoded_alleps,
+            encoded_allurls,
+            encoded_alllines,
+            encoded_ctx,
+            encoded_pic,
+        )
+    };
+
+    let bridge_label = "player_bridge_window";
+    if app.get_webview_window(bridge_label).is_none() {
+        let bridge_url = "player-bridge.html";
+        let _ = WebviewWindowBuilder::new(&app, bridge_label, WebviewUrl::App(bridge_url.into()))
+            .title("Player Bridge")
+            .inner_size(1.0, 1.0)
+            .visible(false)
+            .decorations(false)
+            .build();
+    }
+
+    let window_label = format!("player_window_{}", chrono::Utc::now().timestamp_millis());
+
+    // 创建播放器窗口
+    let win = if player_url.starts_with("file://") {
+        let parsed: url::Url = player_url
+            .parse()
+            .map_err(|e| format!("播放器 URL 无效: {e}"))?;
+        WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::External(parsed))
+    } else {
+        WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::App(player_url.into()))
+    }
+    .title(&title)
+    .inner_size(960.0, 600.0)
+    .min_inner_size(640.0, 400.0)
+    .resizable(true)
+    .decorations(true)
+    .center()
+    .build()
+    .map_err(|e| format!("创建播放器窗口失败: {}", e))?;
+
+    let _win_label = win.label().to_string();
+
+    Ok("ok".into())
+}
+
+#[cfg(target_os = "windows")]
+fn urlencoding_encode(s: &str) -> String {
+    let mut r = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                r.push(b as char)
+            }
+            _ => {
+                r.push('%');
+                for c in format!("{:02X}", b).chars() {
+                    r.push(c);
+                }
+            }
+        }
+    }
+    r
+}
+
+/// Star-Office-UI 后端进程 PID
+#[cfg(target_os = "windows")]
+static STAR_OFFICE_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 查找 Star-Office-UI-master 目录（优先 resource_dir，回退多级路径）
+#[cfg(target_os = "windows")]
+fn find_star_office_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    // 1. 优先从 Tauri resource_dir 查找（打包后的正确路径）
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let candidate = res_dir.join("Star-Office-UI-master");
+        if candidate.join("backend").join("app.py").exists() {
+            return Some(candidate);
+        }
+    }
+    // 2. 开发模式：exe 在 src-tauri/target/debug/，需要往上跳到项目根
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+    let dev_candidates = [
+        exe_dir
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("_vendor")
+            .join("Star-Office-UI-master"),
+        exe_dir
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("_vendor")
+            .join("Star-Office-UI-master"),
+    ];
+    for p in &dev_candidates {
+        let resolved = p.canonicalize().unwrap_or_else(|_| p.clone());
+        if resolved.join("backend").join("app.py").exists() {
+            return Some(resolved);
+        }
+    }
+    // 3. 同时检查 resource_dir/resources/Star-Office-UI-master（Tauri 可能保留 resources/ 前缀）
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let candidate = res_dir.join("resources").join("Star-Office-UI-master");
+        if candidate.join("backend").join("app.py").exists() {
+            return Some(candidate);
+        }
+    }
+    // 4. 安装目录下的 Star-Office-UI-master（NSIS 自定义安装路径）
+    let install_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+    let install_candidate = install_dir.join("Star-Office-UI-master");
+    if install_candidate.join("backend").join("app.py").exists() {
+        return Some(install_candidate);
+    }
+    None
+}
+
+/// 启动 Star-Office-UI Python 后端
+#[cfg(target_os = "windows")]
+async fn start_star_office_backend(app: &tauri::AppHandle) -> Result<u16, String> {
+    let port: u16 = 19000;
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    // 检查后端是否已在运行
+    if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+        return Ok(port);
+    }
+    let office_dir = find_star_office_dir(app).ok_or_else(|| {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_default();
+        let res_dir = app.path().resource_dir().unwrap_or_default();
+        format!(
+            "未找到 Star-Office-UI-master 目录。\n已查找:\n- {} (resource_dir)\n- {} (exe 上级)",
+            res_dir.join("Star-Office-UI-master").display(),
+            exe_dir
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("_vendor")
+                .join("Star-Office-UI-master")
+                .display()
+        )
+    })?;
+    // 确保 state.json 存在
+    let state_file = office_dir.join("state.json");
+    if !state_file.exists() {
+        let sample = office_dir.join("state.sample.json");
+        if sample.exists() {
+            let _ = std::fs::copy(&sample, &state_file);
+        } else {
+            let _ = std::fs::write(
+                &state_file,
+                r#"{"state":"idle","detail":"待命中","progress":0}"#,
+            );
+        }
+    }
+    let agents_file = office_dir.join("agents-state.json");
+    if !agents_file.exists() {
+        let _ = std::fs::write(&agents_file, "{}");
+    }
+    // 检测 Python
+    let python_candidates = ["python3", "python", "py"];
+    let mut python_cmd = None;
+    for cmd in &python_candidates {
+        let mut check = std::process::Command::new(cmd);
+        check.args(["--version"]);
+        #[cfg(target_os = "windows")]
+        check.creation_flags(0x08000000);
+        if check.output().map(|o| o.status.success()).unwrap_or(false) {
+            python_cmd = Some(cmd.to_string());
+            break;
+        }
+    }
+    let python = python_cmd
+        .ok_or_else(|| "未找到 Python，请先安装 Python 3.10+ 并添加到 PATH".to_string())?;
+    // 安装依赖（如果 requirements.txt 存在）
+    let req_file = office_dir.join("backend").join("requirements.txt");
+    if req_file.exists() {
+        let mut install = std::process::Command::new(&python);
+        install
+            .args(["-m", "pip", "install", "-q", "-r", "requirements.txt"])
+            .current_dir(&office_dir);
+        #[cfg(target_os = "windows")]
+        install.creation_flags(0x08000000);
+        let _ = install.output();
+    }
+    // 启动后端
+    let log_path = office_dir.join("backend-run.log");
+    let log_file = std::fs::File::create(&log_path).map_err(|e| format!("创建日志失败: {e}"))?;
+    let log_err = log_file
+        .try_clone()
+        .map_err(|e| format!("克隆日志失败: {e}"))?;
+    let mut cmd = std::process::Command::new(&python);
+    cmd.args(["backend/app.py"])
+        .current_dir(&office_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(log_file)
+        .stderr(log_err)
+        .env("STAR_BACKEND_PORT", port.to_string());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 Star-Office 后端失败: {e}"))?;
+    STAR_OFFICE_PID.store(child.id(), std::sync::atomic::Ordering::SeqCst);
+    // 等待后端就绪
+    for _ in 0..30 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
+            .is_ok()
+        {
+            return Ok(port);
+        }
+    }
+    Err("Star-Office 后端启动超时（15秒），请检查 Python 环境和 backend-run.log".into())
+}
+
+/// 打开龙虾办公室独立窗口
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn open_lobster_office(app: tauri::AppHandle) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::WebviewUrl;
+    use tauri::WebviewWindowBuilder;
+
+    let port = start_star_office_backend(&app).await?;
+    let url = format!("http://127.0.0.1:{port}");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let window_label = format!("lobster_office_{}", ts);
+
+    WebviewWindowBuilder::new(
+        &app,
+        &window_label,
+        WebviewUrl::External(url.parse().unwrap()),
+    )
+    .title("龙虾办公室")
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(960.0, 640.0)
+    .resizable(true)
+    .decorations(true)
+    .center()
+    .build()
+    .map_err(|e| format!("创建龙虾办公室窗口失败: {}", e))?;
+
+    Ok("ok".into())
+}
+
+/// 打开星枢聊天室独立窗口
+#[tauri::command]
+pub async fn open_xingshu_chat_window(app: tauri::AppHandle) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let window_label = format!("xingshu_chat_{}", ts);
+    let chat_url = "/xingshu-chat.html";
+
+    WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::App(chat_url.into()))
+        .title("星枢聊天室")
+        .inner_size(1280.0, 820.0)
+        .min_inner_size(980.0, 640.0)
+        .resizable(true)
+        .decorations(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建星枢聊天室窗口失败: {}", e))?;
+
+    Ok("ok".into())
+}
+
+async fn open_xingshu_skill_url_window(
+    app: tauri::AppHandle,
+    url: &str,
+    title: &str,
+    window_label: &str,
+) -> Result<String, String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+    let parsed_url: url::Url = url
+        .parse()
+        .map_err(|e| format!("星枢技能中心 URL 无效: {}", e))?;
+
+    if let Some(window) = app.get_webview_window(window_label) {
+        let _ = window.close();
+    }
+
+    WebviewWindowBuilder::new(&app, window_label, WebviewUrl::External(parsed_url))
+        .title(title)
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(980.0, 640.0)
+        .resizable(true)
+        .decorations(true)
+        .visible(true)
+        .focused(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建{}窗口失败: {}", title, e))?;
+
+    Ok("ok".into())
+}
+
+#[tauri::command]
+pub async fn open_xingshu_skill_center_window(app: tauri::AppHandle) -> Result<String, String> {
+    open_xingshu_skill_url_window(
+        app,
+        "https://www.aiyu.jx.cn/xingshu-skill/index.local.html",
+        "星枢技能中心",
+        "xingshu_skill_center",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn open_xingshu_skill_security_window(app: tauri::AppHandle) -> Result<String, String> {
+    open_xingshu_skill_url_window(
+        app,
+        "https://www.aiyu.jx.cn/skill-security/",
+        "星枢安全检测",
+        "xingshu_skill_security",
+    )
+    .await
+}
+
+/// 列出目录内容
+#[tauri::command]
+pub async fn assistant_list_dir(path: String) -> Result<String, String> {
+    let mut entries = tokio::fs::read_dir(&path)
+        .await
+        .map_err(|e| format!("读取目录失败 {path}: {e}"))?;
+
+    let mut items = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(|e| format!("{e}"))? {
+        let meta = entry.metadata().await.ok();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+        if is_dir {
+            items.push(format!("[DIR]  {}/", name));
+        } else {
+            items.push(format!("[FILE] {} ({} bytes)", name, size));
+        }
+
+        if items.len() >= 200 {
+            items.push("...(已截断)".into());
+            break;
+        }
+    }
+
+    items.sort();
+    Ok(items.join("\n"))
+}
+
+/// Floating button overlay for m3u8 extraction via webview.eval()
+/// Floating button overlay for m3u8 extraction via webview.eval()
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+
+pub async fn open_global_builtin_window(
+    app: tauri::AppHandle,
+    url: Option<String>,
+) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+    let target_url = url.unwrap_or_else(|| "https://zh.stripcam.xxx/top/girls/curr".to_string());
+
+    eprintln!("[open_global_builtin_window] target_url: {}", target_url);
+    if target_url.starts_with("data:") || target_url.starts_with("file:") {
+        return Err("No data/file URLs allowed".to_string());
+    }
+
+    let label = "global_builtin_window";
+
+    // 窗口已存在 → 显示并重新导航到密码验证页面
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let auth_html = include_str!("../../../public/global-builtin.html");
+        let html_with_url = auth_html.replace(
+            "var TARGET = '';",
+            &format!("var TARGET = {};", serde_json::json!(&target_url)),
+        );
+        let temp_dir = std::env::temp_dir().join("tulu_global_builtin");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let temp_file = temp_dir.join("global-builtin.html");
+        let _ = std::fs::write(&temp_file, &html_with_url);
+        // 用 Tauri navigate API 而非 eval（更可靠）
+        let file_url = format!("file:///{}", temp_file.to_string_lossy().replace('\\', "/"));
+        if let Ok(parsed) = url::Url::parse(&file_url) {
+            let _ = window.navigate(parsed);
+        }
+        return Ok(());
+    }
+
+    // Build the full HTML with target URL embedded
+    let auth_html = include_str!("../../../public/global-builtin.html");
+    let html_with_url = auth_html.replace(
+        "var TARGET = '';",
+        &format!("var TARGET = {};", serde_json::json!(&target_url)),
+    );
+
+    // Write to temp file (avoid data: URL which WebView2 blocks)
+    let temp_dir = std::env::temp_dir().join("tulu_global_builtin");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_file = temp_dir.join("global-builtin.html");
+    std::fs::write(&temp_file, &html_with_url).map_err(|e| format!("写入临时HTML失败: {}", e))?;
+
+    let file_url = format!("file:///{}", temp_file.to_string_lossy().replace('\\', "/"));
+    // ★ 最早钩子脚本：通过 initialization_script 在页面 JS 之前注入
+    // 确保 fetch/XHR/WebSocket 拦截在页面任何脚本执行前就位
+    let hooks_js = include_str!("../../../public/global-builtin-hooks.js");
+
+    eprintln!("[open_global_builtin_window] file_url: {}", file_url);
+
+    let file_url_parsed: url::Url = file_url
+        .parse()
+        .map_err(|e| format!("Invalid file URL: {}", e))?;
+
+    eprintln!("[open_global_builtin_window] creating window...");
+    let win = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(file_url_parsed))
+        .initialization_script(hooks_js)
+        .title("全球内置")
+        .inner_size(1200.0, 800.0)
+        .center()
+        .resizable(true)
+        .decorations(true)
+        .visible(true)
+        .focused(true)
+        .build()
+        .map_err(|e| {
+            eprintln!("[open_global_builtin_window] build ERR: {}", e);
+            format!("Failed to create window: {}", e)
+        })?;
+    eprintln!(
+        "[open_global_builtin_window] window created, label: {}",
+        win.label()
+    );
+
+    // Inject floating bar script
+    let inject_js = include_str!("../../../public/global-builtin-inject.js").to_string();
+
+    // Initial injection after auth page loads
+    let ah1 = app.clone();
+    let inj1 = inject_js.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Some(w) = ah1.get_webview_window("global_builtin_window") {
+            let _ = w.eval(&inj1);
+        }
+    });
+
+    // Re-inject every 3s so bar survives across navigations
+    let ah2 = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..400 {
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            if let Some(w) = ah2.get_webview_window("global_builtin_window") {
+                let _ = w.eval("window.__tulu_injected = false;");
+                let _ = w.eval(&inject_js);
+            } else {
+                break;
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// 龙虾办公室状态同步 - 后台线程写入状态文件
+///
+/// 状态文件路径: %APPDATA%/XingShuOpenClaw_v2/openclaw-office-state.json
+/// Star-Office-UI 后端读取此文件，自动映射到办公室状态
+use std::sync::OnceLock;
+static OFFICE_SYNC_HANDLE: OnceLock<std::thread::JoinHandle<()>> = OnceLock::new();
+
+/// 启动龙虾办公室状态同步后台线程
+pub fn start_office_sync(app: tauri::AppHandle) {
+    OFFICE_SYNC_HANDLE.get_or_init(move || {
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if let Err(e) = sync_office_state(&app) {
+                eprintln!("[Office Sync] 同步失败: {e}");
+            }
+        })
+    });
+}
+
+/// 同步当前状态到龙虾办公室
+fn sync_office_state(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // 确定状态文件路径
+    let state_file = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("openclaw-office-state.json");
+
+    // 确保目录存在
+    if let Some(parent) = state_file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // 检查各服务状态
+    let services = tokio::runtime::Runtime::new()
+        .map_err(|e| e.to_string())?
+        .block_on(crate::commands::service::get_services_status())
+        .unwrap_or_default();
+
+    let mut gateway_online = false;
+    let mut hermes_online = false;
+    let mut services_status = serde_json::Map::new();
+
+    for svc in &services {
+        let name = svc.label.clone();
+        let running = svc.running;
+        services_status.insert(
+            name.clone(),
+            serde_json::json!({
+                "running": running,
+                "description": svc.description
+            }),
+        );
+
+        let name_lower = name.to_lowercase();
+        if name_lower.contains("gateway") || name_lower.contains("openclaw") {
+            gateway_online = running;
+        }
+        if name_lower.contains("hermes") {
+            hermes_online = running;
+        }
+    }
+
+    // 确定综合状态
+    let (state, detail) = if !gateway_online {
+        ("idle".to_string(), "OpenClaw 离线".to_string())
+    } else if gateway_online && hermes_online {
+        (
+            "writing".to_string(),
+            "OpenClaw + Hermes 运行中".to_string(),
+        )
+    } else if gateway_online {
+        (
+            "executing".to_string(),
+            "OpenClaw Gateway 运行中".to_string(),
+        )
+    } else {
+        ("idle".to_string(), "待命中".to_string())
+    };
+
+    // 构建完整状态
+    let state_data = serde_json::json!({
+        "state": state,
+        "detail": detail,
+        "progress": 0,
+        "updated_at": chrono_now(),
+        "services": services_status,
+        "gateway_online": gateway_online,
+        "hermes_online": hermes_online,
+        "agent_name": "爱羽"
+    });
+
+    // 写入文件
+    let json_str = serde_json::to_string_pretty(&state_data).map_err(|e| e.to_string())?;
+    std::fs::write(&state_file, json_str).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 获取当前时间戳（ISO 格式）
+fn chrono_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| {
+            let secs = d.as_secs();
+            let dt = chrono::DateTime::from_timestamp(secs as i64, 0);
+            dt.map(|d| d.to_rfc3339()).unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// 手动更新龙虾办公室状态（供前端调用）
+#[tauri::command]
+pub async fn update_office_state(
+    app: tauri::AppHandle,
+    state: String,
+    detail: String,
+) -> Result<(), String> {
+    // 验证状态值
+    let valid_states = [
+        "idle",
+        "writing",
+        "researching",
+        "executing",
+        "syncing",
+        "error",
+        "receiving",
+        "replying",
+    ];
+    if !valid_states.contains(&state.as_str()) {
+        return Err(format!("无效状态: {}，有效值: {:?}", state, valid_states));
+    }
+
+    // 写入 Star-Office-UI 的 state.json
+    let state_file = find_star_office_state_file(&app)?;
+
+    let mut state_data: serde_json::Value = if state_file.exists() {
+        let content = std::fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    state_data["state"] = serde_json::Value::String(state);
+    state_data["detail"] = serde_json::Value::String(detail);
+    state_data["updated_at"] = serde_json::Value::String(chrono_now());
+
+    let json_str = serde_json::to_string_pretty(&state_data).map_err(|e| e.to_string())?;
+    std::fs::write(&state_file, json_str).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 查找 Star-Office-UI 的 state.json 文件
+fn find_star_office_state_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+
+    // 1. 检查 _vendor/Star-Office-UI-master/state.json（开发模式）
+    let manifest_dir = option_env!("CARGO_MANIFEST_DIR").unwrap_or(".");
+    let vendor_state = std::path::Path::new(manifest_dir)
+        .join("..")
+        .join("_vendor")
+        .join("Star-Office-UI-master")
+        .join("state.json");
+    if vendor_state.exists() {
+        return Ok(vendor_state);
+    }
+
+    // 2. 检查 resource_dir/state.json
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let res_state = res_dir.join("Star-Office-UI-master").join("state.json");
+        if res_state.exists() {
+            return Ok(res_state);
+        }
+        let res_state2 = res_dir
+            .join("resources")
+            .join("Star-Office-UI-master")
+            .join("state.json");
+        if res_state2.exists() {
+            return Ok(res_state2);
+        }
+    }
+
+    // 3. 检查 exe 目录
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+    let exe_state = exe_dir.join("Star-Office-UI-master").join("state.json");
+    if exe_state.exists() {
+        return Ok(exe_state);
+    }
+
+    Err("未找到 Star-Office-UI state.json".to_string())
+}
+
+/// 同步 OpenClaw 状态到龙虾办公室（供前端定时调用）
+#[tauri::command]
+pub async fn sync_openclaw_to_office(app: tauri::AppHandle) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || sync_office_state(&app))
+        .await
+        .map_err(|e| format!("同步办公室状态任务失败: {e}"))?
+}
+
+/// open_live_player — 打开独立直播播放器窗口
+#[tauri::command]
+pub async fn open_live_player(
+    app: tauri::AppHandle,
+    sources: Vec<serde_json::Value>,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager, WebviewUrl};
+
+    let sources_json = serde_json::to_string(&sources).unwrap_or_else(|_| "[]".to_string());
+    let encoded = urlencoding::encode(&sources_json);
+    let player_url = format!("live-player.html?sources={}", encoded);
+
+    // 窗口存在 → 用 navigate 导航加载新源（而非不可靠的 eval）
+    if let Some(window) = app.get_webview_window("live_player_window") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Ok(parsed) = url::Url::parse(&format!("https://tauri.localhost/{}", player_url)) {
+            let _ = window.navigate(parsed);
+        }
+        let _ = app.emit("live-player-sources", &sources);
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "live_player_window",
+        WebviewUrl::App(player_url.into()),
+    )
+    .title("直播播放器")
+    .inner_size(1280.0, 720.0)
+    .min_inner_size(640.0, 360.0)
+    .resizable(true)
+    .decorations(true)
+    .always_on_top(false)
+    .build()
+    .map_err(|e| format!("创建播放器窗口失败: {}", e))?;
+
+    // ★ 延迟 emit，等待前端 JS 加载完成后再发送源数据
+    let app_emit = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let _ = app_emit.emit("live-player-sources", &sources);
+    });
+
+    Ok(())
+}
+
+/// close_live_player — 关闭独立直播播放器窗口
+#[tauri::command]
+pub fn close_live_player(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("live_player_window") {
+        let _ = window.close();
+    }
+    Ok(())
+}
+
+/// navigate_window
+/// save_recording - 保存录屏数据到用户指定路径（通过Tauri对话框选择）
+#[tauri::command]
+pub async fn save_recording(
+    app: tauri::AppHandle,
+    data: Vec<u8>,
+    default_name: String,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let _downloads = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("WebM Video", &["webm"])
+        .add_filter("MP4 Video", &["mp4"])
+        .add_filter("All Files", &["*"])
+        .blocking_save_file();
+
+    if let Some(path) = file_path {
+        let path_str = path.to_string();
+        std::fs::write(&path_str, &data).map_err(|e| format!("写入文件失败: {}", e))?;
+        Ok(path_str)
+    } else {
+        Err("用户取消保存".to_string())
+    }
+}
+
+/// fetch_live_sources - 深度递归扫描：无论资源在任何页任何层都必须扫到
+#[tauri::command]
+pub async fn fetch_live_sources(url: String) -> Result<Vec<serde_json::Value>, String> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    fn add_url(
+        u: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        let u = u.trim();
+        if u.is_empty() || u.len() > 4096 {
+            return;
+        }
+        if !u.starts_with("http") {
+            return;
+        }
+        if seen.contains(u) {
+            return;
+        }
+        seen.insert(u.to_string());
+        results.push(serde_json::json!({ "url": u, "from": src }));
+    }
+
+    fn url_decode_str(s: &str) -> String {
+        urlencoding::decode(s)
+            .map(|r| r.into_owned())
+            .unwrap_or_else(|_| s.to_string())
+    }
+
+    /// 深度解码：URL解码 + base64解码（递归，最多3层）
+    fn deep_decode(
+        s: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+        depth: usize,
+    ) {
+        if depth == 0 || s.is_empty() {
+            return;
+        }
+        let url_decoded = url_decode_str(s);
+        if url_decoded != s {
+            scan_text(
+                &url_decoded,
+                &format!("{} (url-decode)", src),
+                results,
+                seen,
+            );
+            if depth > 1 {
+                deep_decode(
+                    &url_decoded,
+                    &format!("{} (url-decode^2)", src),
+                    results,
+                    seen,
+                    depth - 1,
+                );
+            }
+        }
+        if s.len() >= 16 {
+            if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
+            {
+                if let Ok(s2) = String::from_utf8(bytes) {
+                    if s2.len() > 4 && is_printable(&s2) {
+                        scan_text(&s2, &format!("{} (base64)", src), results, seen);
+                        deep_decode(
+                            &s2,
+                            &format!("{} (base64-deep)", src),
+                            results,
+                            seen,
+                            depth - 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_printable(s: &str) -> bool {
+        s.chars()
+            .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+            .count()
+            < s.len() / 4
+    }
+
+    /// 扫描文本中的视频 URL（增强版：query string解码 + 多格式 + RTMP）
+    fn scan_text(
+        text: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        // 1. m3u8 URL
+        if let Ok(re) = regex::Regex::new(r#"https?://[^"'\s<>\\]+\.m3u8[^"'\s<>\\]*"#) {
+            for m in re.find_iter(text) {
+                add_url(m.as_str(), src, results, seen);
+            }
+        }
+        // 2. 双引号包裹
+        if let Ok(re) = regex::Regex::new(r#""(https?://[^"\\]+\.m3u8[^"\\]*)""#) {
+            for c in re.captures_iter(text) {
+                if let Some(v) = c.get(1) {
+                    add_url(v.as_str(), src, results, seen);
+                }
+            }
+        }
+        // 3. 单引号包裹
+        if let Ok(re) = regex::Regex::new(r#"'+(https?://[^'\\]+\.m3u8[^'\\]*)'+"#) {
+            for c in re.captures_iter(text) {
+                if let Some(v) = c.get(1) {
+                    add_url(v.as_str(), src, results, seen);
+                }
+            }
+        }
+        // 4. mp4/flv/webm 直链
+        if let Ok(re) =
+            regex::Regex::new(r#"https?://[^"'\s<>\\]+\.(?:mp4|flv|webm|ts)[^"'\s<>\\]*"#)
+        {
+            for m in re.find_iter(text) {
+                let u = m.as_str();
+                if u.len() > 20
+                    && !u.contains(".js")
+                    && !u.contains(".css")
+                    && !u.contains(".png")
+                    && !u.contains(".jpg")
+                {
+                    add_url(u, src, results, seen);
+                }
+            }
+        }
+        // 5. Query string 编码的 URL
+        if let Ok(re) = regex::Regex::new(
+            r#"(?:url|src|href|video|stream|link|source|m3u8|file)=(https?%3A[^&"'\s<>]+)"#,
+        ) {
+            for c in re.captures_iter(text) {
+                if let Some(v) = c.get(1) {
+                    let decoded = url_decode_str(v.as_str());
+                    scan_text(&decoded, &format!("{} (query-param)", src), results, seen);
+                }
+            }
+        }
+        // 6. RTMP URL
+        if let Ok(re) = regex::Regex::new(r#"rtmp://[^"'\s<>\\]+"#) {
+            for m in re.find_iter(text) {
+                add_url(m.as_str(), &format!("{} (rtmp)", src), results, seen);
+            }
+        }
+    }
+
+    /// 深度 JS 扫描：字符串提取 + 模式匹配 + 拼接检测 + 配置对象
+    fn scan_js_deep(
+        js: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        // 1. eval/Function/setTimeout/atob 包裹
+        for pat in &[
+            r#"eval\s*\(\s*["']([^"']+)["']\s*\)"#,
+            r#"Function\s*\(\s*["']([^"']+)["']\s*\)"#,
+            r#"setTimeout\s*\(\s*["']([^"']+)"#,
+            r#"atob\s*\(\s*["']([^"']+)["']\s*\)"#,
+        ] {
+            if let Ok(re) = regex::Regex::new(pat) {
+                for c in re.captures_iter(js) {
+                    if let Some(s_m) = c.get(1) {
+                        let v = s_m.as_str();
+                        scan_text(v, src, results, seen);
+                        deep_decode(v, src, results, seen, 3);
+                    }
+                }
+            }
+        }
+
+        // 2. JSON.parse 解析数组/对象
+        if let Ok(re) = regex::Regex::new(r#"JSON\.parse\s*\(\s*["']([^"']+)["']\s*\)"#) {
+            for c in re.captures_iter(js) {
+                if let Some(s_m) = c.get(1) {
+                    let decoded = url_decode_str(s_m.as_str());
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&decoded) {
+                        extract_urls_from_json(&parsed, src, results, seen);
+                    }
+                }
+            }
+        }
+
+        // 3. 模板字符串
+        if let Ok(re) = regex::Regex::new(r#"``([^`]+)``"#) {
+            for c in re.captures_iter(js) {
+                if let Some(s_m) = c.get(1) {
+                    scan_text(&url_decode_str(s_m.as_str()), src, results, seen);
+                }
+            }
+        }
+
+        // 4. 长 base64 字符串
+        if let Ok(re) = regex::Regex::new(r#"["']([A-Za-z0-9+/=_\-]{40,})["']"#) {
+            for c in re.captures_iter(js) {
+                if let Some(s_m) = c.get(1) {
+                    deep_decode(s_m.as_str(), src, results, seen, 2);
+                }
+            }
+        }
+
+        // 5. 字符串拼接 URL（host + "/live.m3u8"）
+        if let Ok(re) = regex::Regex::new(
+            r#"["'](https?://[^"']+)["']\s*\+\s*["']([^"']*(?:\.m3u8|/live|/stream|/play)[^"']*)["']"#,
+        ) {
+            for c in re.captures_iter(js) {
+                if let (Some(a), Some(b)) = (c.get(1), c.get(2)) {
+                    let url = format!("{}{}", a.as_str(), b.as_str());
+                    add_url(&url, &format!("{} (concat)", src), results, seen);
+                }
+            }
+        }
+
+        // 6. 配置对象中的 URL
+        if let Ok(re) = regex::Regex::new(
+            r#"(?:sources?|src|url|stream|hls|video|file|playurl|streamurl|videoUrl|playUrl)\s*[:=]\s*["'](https?://[^"']+\.m3u8[^"']*)["']"#,
+        ) {
+            for c in re.captures_iter(js) {
+                if let Some(v) = c.get(1) {
+                    add_url(v.as_str(), &format!("{} (config)", src), results, seen);
+                }
+            }
+        }
+
+        // 7. fetch/XMLHttpRequest URL
+        if let Ok(re) = regex::Regex::new(
+            r#"(?:fetch|XMLHttpRequest|axios\.get|axios\.post|\$\.ajax|\$\.get)\s*\(\s*["'](https?://[^"']+)"#,
+        ) {
+            for c in re.captures_iter(js) {
+                if let Some(v) = c.get(1) {
+                    scan_text(v.as_str(), &format!("{} (fetch)", src), results, seen);
+                }
+            }
+        }
+
+        // 8. WebSocket URL
+        if let Ok(re) = regex::Regex::new(r#"wss?://[^"'\s<>\\]+"#) {
+            for m in re.find_iter(js) {
+                add_url(m.as_str(), &format!("{} (ws)", src), results, seen);
+            }
+        }
+
+        // 9. new URL() 构造
+        if let Ok(re) = regex::Regex::new(r#"new\s+URL\s*\(\s*["'](https?://[^"']+)"#) {
+            for c in re.captures_iter(js) {
+                if let Some(v) = c.get(1) {
+                    scan_text(v.as_str(), &format!("{} (new-URL)", src), results, seen);
+                }
+            }
+        }
+
+        // 10. 所有含视频关键词的字符串字面量
+        if let Ok(re) = regex::Regex::new(r#""([^"]{15,})""#) {
+            for c in re.captures_iter(js) {
+                if let Some(v) = c.get(1) {
+                    let s = v.as_str();
+                    if s.contains("m3u8")
+                        || s.contains("/live")
+                        || s.contains("/stream")
+                        || s.contains("/play")
+                    {
+                        scan_text(s, &format!("{} (str-lit)", src), results, seen);
+                        deep_decode(s, &format!("{} (str-lit-deep)", src), results, seen, 2);
+                    }
+                }
+            }
+        }
+        if let Ok(re) = regex::Regex::new(r#"([^']{15,})'"#) {
+            for c in re.captures_iter(js) {
+                if let Some(v) = c.get(1) {
+                    let s = v.as_str();
+                    if s.contains("m3u8")
+                        || s.contains("/live")
+                        || s.contains("/stream")
+                        || s.contains("/play")
+                    {
+                        scan_text(s, &format!("{} (str-lit)", src), results, seen);
+                        deep_decode(s, &format!("{} (str-lit-deep)", src), results, seen, 2);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 从 JSON 值递归提取 URL
+    fn extract_urls_from_json(
+        val: &serde_json::Value,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        match val {
+            serde_json::Value::String(s) => {
+                scan_text(s, src, results, seen);
+            }
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    extract_urls_from_json(item, src, results, seen);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (_k, v) in map {
+                    extract_urls_from_json(v, src, results, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[async_recursion::async_recursion]
+    async fn scan_html_recursive(
+        html: &str,
+        _base: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+        client: &reqwest::Client,
+        depth: usize,
+    ) {
+        if depth == 0 {
+            return;
+        }
+        scan_text(html, src, results, seen);
+
+        if let Ok(re) = regex::Regex::new(
+            r#"(?:src|href|data-src|data-url|data-stream|data-href|action|poster)=["']([^"']+)["']"#,
+        ) {
+            for c in re.captures_iter(html) {
+                if let Some(v) = c.get(1) {
+                    scan_text(
+                        &url_decode_str(v.as_str()),
+                        &format!("{} (attr)", src),
+                        results,
+                        seen,
+                    );
+                }
+            }
+        }
+        if let Ok(re) = regex::Regex::new(r#"<source[^>]+src=["']([^"']+)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(v) = c.get(1) {
+                    add_url(v.as_str(), &format!("{} (<source>)", src), results, seen);
+                }
+            }
+        }
+        for tag in &["video", "audio", "iframe", "embed", "object"] {
+            if let Ok(re) = regex::Regex::new(&format!(r#"<{}[^>]+src=["']([^"']+)["']"#, tag)) {
+                for c in re.captures_iter(html) {
+                    if let Some(v) = c.get(1) {
+                        let tag_url = v.as_str();
+                        if tag_url.starts_with("http")
+                            && !tag_url.contains("youtube")
+                            && !tag_url.contains("googlesyndication")
+                        {
+                            let this_src = format!("{} (<{}>)", src, tag);
+                            add_url(tag_url, &this_src, results, seen);
+                            if *tag == "iframe" {
+                                if let Ok(resp) = client.get(tag_url).send().await {
+                                    if let Ok(iframe_html) = resp.text().await {
+                                        let iframe_src = format!("{} (iframe)", src);
+                                        scan_text(&iframe_html, &iframe_src, results, seen);
+                                        scan_html_recursive(
+                                            &iframe_html,
+                                            tag_url,
+                                            &iframe_src,
+                                            results,
+                                            seen,
+                                            client,
+                                            depth - 1,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(re) = regex::Regex::new(r#"data-[a-zA-Z-]+=["']([^"']*m3u8[^"']*)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(v) = c.get(1) {
+                    scan_text(
+                        &url_decode_str(v.as_str()),
+                        &format!("{} (data-attr)", src),
+                        results,
+                        seen,
+                    );
+                }
+            }
+        }
+        if let Ok(re) =
+            regex::Regex::new(r#"(?:onclick|onerror|onload|onplay|onplayback)=["']([^"']+)["']"#)
+        {
+            for c in re.captures_iter(html) {
+                if let Some(v) = c.get(1) {
+                    scan_text(
+                        &url_decode_str(v.as_str()),
+                        &format!("{} (event)", src),
+                        results,
+                        seen,
+                    );
+                }
+            }
+        }
+        if let Ok(re) = regex::Regex::new(r#"style=["']([^"']*url\([^"']+\)[^"']*)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(v) = c.get(1) {
+                    scan_text(
+                        &url_decode_str(v.as_str()),
+                        &format!("{} (style)", src),
+                        results,
+                        seen,
+                    );
+                }
+            }
+        }
+        if let Ok(re) = regex::Regex::new(r#"(?s)<script[^>]*>(.*?)</script>"#) {
+            for c in re.captures_iter(html) {
+                if let Some(content) = c.get(1) {
+                    let script = content.as_str();
+                    scan_text(script, &format!("{} (script)", src), results, seen);
+                    scan_js_deep(script, &format!("{} (js)", src), results, seen);
+                }
+            }
+        }
+    }
+
+    async fn scan_js_files(
+        html: &str,
+        base: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+        client: &reqwest::Client,
+    ) {
+        if let Ok(re) = regex::Regex::new(r#"<script[^>]+src=["']([^"']+\.js[^"']*)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(js_url_m) = c.get(1) {
+                    let js_url = js_url_m.as_str();
+                    let full_url = if js_url.starts_with("//") {
+                        format!("https:{}", js_url)
+                    } else if js_url.starts_with("/") {
+                        url::Url::parse(base)
+                            .ok()
+                            .and_then(|b| b.join(js_url).ok())
+                            .map(|u| u.to_string())
+                            .unwrap_or_else(|| js_url.to_string())
+                    } else if js_url.starts_with("http") {
+                        js_url.to_string()
+                    } else {
+                        format!("{}/{}", base.trim_end_matches('/'), js_url)
+                    };
+                    if full_url.starts_with("http") && !seen.contains(&full_url) {
+                        seen.insert(full_url.clone());
+                        if let Ok(resp) = client.get(&full_url).send().await {
+                            if let Ok(js_text) = resp.text().await {
+                                let this_src = &format!("{} (js:{})", src, js_url);
+                                scan_text(&js_text, this_src, results, seen);
+                                scan_js_deep(&js_text, this_src, results, seen);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[async_recursion::async_recursion]
+    async fn scan_iframes(
+        html: &str,
+        _base: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+        client: &reqwest::Client,
+        depth: usize,
+    ) {
+        if depth == 0 {
+            return;
+        }
+        if let Ok(re) = regex::Regex::new(r#"<iframe[^>]+src=["']([^"']+)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(iframe_m) = c.get(1) {
+                    let iframe_url = iframe_m.as_str();
+                    if iframe_url.starts_with("http")
+                        && !iframe_url.contains("youtube.com")
+                        && !iframe_url.contains("googlesyndication")
+                    {
+                        if let Ok(resp) = client.get(iframe_url).send().await {
+                            if let Ok(iframe_html) = resp.text().await {
+                                let this_src = &format!("{} (iframe)", src);
+                                scan_text(&iframe_html, this_src, results, seen);
+                                scan_html_recursive(
+                                    &iframe_html,
+                                    iframe_url,
+                                    this_src,
+                                    results,
+                                    seen,
+                                    client,
+                                    depth - 1,
+                                )
+                                .await;
+                                scan_iframes(
+                                    &iframe_html,
+                                    iframe_url,
+                                    this_src,
+                                    results,
+                                    seen,
+                                    client,
+                                    depth - 1,
+                                )
+                                .await;
+                                scan_js_files(
+                                    &iframe_html,
+                                    iframe_url,
+                                    this_src,
+                                    results,
+                                    seen,
+                                    client,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn scan_meta(
+        html: &str,
+        src: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        if let Ok(re) = regex::Regex::new(r#"<meta[^>]+content=["'][^"']*url=([^"']+)["']"#) {
+            for c in re.captures_iter(html) {
+                if let Some(u) = c.get(1) {
+                    scan_text(u.as_str(), &format!("{} (meta)", src), results, seen);
+                }
+            }
+        }
+    }
+
+    async fn probe_paths(
+        base: &str,
+        results: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::HashSet<String>,
+        client: &reqwest::Client,
+    ) {
+        let base = base.trim_end_matches('/');
+        let paths = [
+            "/live/live.m3u8",
+            "/live.m3u8",
+            "/live/stream.m3u8",
+            "/live/index.m3u8",
+            "/stream/live.m3u8",
+            "/stream/index.m3u8",
+            "/stream.m3u8",
+            "/hls/live.m3u8",
+            "/hls/index.m3u8",
+            "/hls/stream.m3u8",
+            "/hls.m3u8",
+            "/playlist.m3u8",
+            "/play.m3u8",
+            "/index.m3u8",
+            "/api/live.m3u8",
+            "/api/stream.m3u8",
+            "/api/v1/live.m3u8",
+            "/api/v1/stream.m3u8",
+            "/api/hls/live.m3u8",
+            "/v1/live.m3u8",
+            "/v1/stream.m3u8",
+            "/v2/live.m3u8",
+            "/channel/live.m3u8",
+            "/channels/live.m3u8",
+            "/video/live.m3u8",
+            "/videos/live.m3u8",
+            "/player/live.m3u8",
+            "/players/live.m3u8",
+            "/show/live.m3u8",
+            "/shows/live.m3u8",
+            "/broadcast/live.m3u8",
+            "/broadcast/stream.m3u8",
+            "/events/live.m3u8",
+            "/event/live.m3u8",
+            "/live/000001.m3u8",
+            "/live/000002.m3u8",
+            "/live/000003.m3u8",
+            "/live/000001/index.m3u8",
+            "/live/chaturbate.m3u8",
+            "/embed/live.m3u8",
+            "/embed/stream.m3u8",
+            "/player_embed/live.m3u8",
+            "/embed_player/live.m3u8",
+            "/player-embed/live.m3u8",
+            "/cdn/live.m3u8",
+            "/cdn/stream.m3u8",
+            "/static/live.m3u8",
+            "/static/stream.m3u8",
+            "/assets/live.m3u8",
+            "/assets/stream.m3u8",
+            "/media/live.m3u8",
+            "/media/stream.m3u8",
+            "/data/live.m3u8",
+            "/files/live.m3u8",
+            "/public/live.m3u8",
+            "/public/stream.m3u8",
+            "/live.m3u8?token=1",
+            "/live.m3u8?_t=1",
+            "/live.m3u8?key=abc",
+            "/live.m3u8?live=1",
+            "/live/live.m3u8?token=1",
+            "/live/stream.m3u8?token=1",
+            "/1/live.m3u8",
+            "/2/live.m3u8",
+            "/3/live.m3u8",
+            "/4/live.m3u8",
+            "/5/live.m3u8",
+            "/6/live.m3u8",
+            "/7/live.m3u8",
+            "/8/live.m3u8",
+            "/9/live.m3u8",
+            "/10/live.m3u8",
+            "/01/live.m3u8",
+            "/02/live.m3u8",
+            "/03/live.m3u8",
+            "/04/live.m3u8",
+            "/05/live.m3u8",
+            "/live/1/index.m3u8",
+            "/live/2/index.m3u8",
+            "/live/3/index.m3u8",
+            "/live/001/index.m3u8",
+            "/live/002/index.m3u8",
+            "/live/003/index.m3u8",
+            "/live/play.m3u8",
+            "/stream/stream.m3u8",
+            "/plist.m3u8",
+            "/master.m3u8",
+            "/chunklist.m3u8",
+            "/direct/live.m3u8",
+            "/direct/stream.m3u8",
+            "/proxy/live.m3u8",
+            "/proxy/stream.m3u8",
+            "/relay/live.m3u8",
+            "/relay/stream.m3u8",
+            "/user/live.m3u8",
+            "/users/live.m3u8",
+            "/profile/live.m3u8",
+            "/account/live.m3u8",
+            "/u/live.m3u8",
+            "/p/live.m3u8",
+            "/s/live.m3u8",
+            "/l/live.m3u8",
+            "/t/live.m3u8",
+            "/c/live.m3u8",
+            "/m/live.m3u8",
+            "/us/live.m3u8",
+            "/eu/live.m3u8",
+            "/asia/live.m3u8",
+            "/en/live.m3u8",
+            "/cn/live.m3u8",
+            "/jp/live.m3u8",
+            "/watch/live.m3u8",
+            "/view/live.m3u8",
+            "/playlive.m3u8",
+            "/livestream.m3u8",
+            "/rtmp/live.m3u8",
+            "/flash/live.m3u8",
+            "/web/live.m3u8",
+            "/web/stream.m3u8",
+            "/site/live.m3u8",
+            "/sites/live.m3u8",
+            "/app/live.m3u8",
+            "/apps/live.m3u8",
+            "/content/live.m3u8",
+            "/contents/live.m3u8",
+            "/streamer/live.m3u8",
+            "/live",
+            "/stream",
+            "/embed",
+            "/player",
+            "/watch",
+            "/play",
+            "/video",
+            "/videos",
+        ];
+
+        let mut handles = Vec::new();
+        for path in &paths {
+            let probe = format!("{}{}", base, path);
+            if seen.contains(&probe) {
+                continue;
+            }
+            let client = client.clone();
+            handles.push(tokio::spawn(async move {
+                if let Ok(resp) = client.get(&probe).send().await {
+                    if resp.status().as_u16() == 200 {
+                        if let Some(ct) = resp.headers().get("content-type") {
+                            let ct_str = ct.to_str().unwrap_or("");
+                            if ct_str.contains("mpegurl")
+                                || ct_str.contains("apple.mpegurl")
+                                || ct_str.contains("audio")
+                            {
+                                return Some(probe);
+                            }
+                        }
+                    }
+                }
+                None::<String>
+            }));
+        }
+
+        for handle in handles {
+            if let Ok(Some(probe)) = handle.await {
+                if !seen.contains(&probe) {
+                    seen.insert(probe.clone());
+                    results.push(serde_json::json!({ "url": probe, "from": "path-probe" }));
+                }
+            }
+        }
+    }
+
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+
+    scan_html_recursive(&html, &url, "page", &mut results, &mut seen, &client, 3).await;
+    scan_js_files(&html, &url, "page", &mut results, &mut seen, &client).await;
+    scan_iframes(&html, &url, "page", &mut results, &mut seen, &client, 3).await;
+    scan_meta(&html, "page", &mut results, &mut seen);
+    probe_paths(&url, &mut results, &mut seen, &client).await;
+
+    let mut final_results: Vec<serde_json::Value> = Vec::new();
+    let mut final_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for r in &results {
+        if let Some(u) = r.get("url").and_then(|v| v.as_str()) {
+            if !final_seen.contains(u) {
+                final_seen.insert(u.to_string());
+                if let Ok(resp2) = client.get(u).send().await {
+                    if resp2.status().is_redirection() {
+                        if let Some(loc) = resp2.headers().get("location") {
+                            if let Ok(loc_str) = loc.to_str() {
+                                let redirect_url = if loc_str.starts_with("/") {
+                                    url::Url::parse(u)
+                                        .ok()
+                                        .and_then(|b| b.join(loc_str).ok())
+                                        .map(|j| j.to_string())
+                                        .unwrap_or_else(|| loc_str.to_string())
+                                } else {
+                                    loc_str.to_string()
+                                };
+                                if redirect_url.contains(".m3u8")
+                                    && !final_seen.contains(&redirect_url)
+                                {
+                                    final_seen.insert(redirect_url.clone());
+                                    let mut new_r = r.clone();
+                                    new_r["url"] = serde_json::json!(redirect_url);
+                                    new_r["from"] =
+                                        serde_json::json!(format!("{} (redirect)", r["from"]));
+                                    final_results.push(new_r);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                final_results.push(r.clone());
+            }
+        }
+    }
+
+    Ok(final_results)
+}
+
+/// navigate_window
+/// navigate_window — 导航指定窗口到新 URL
+#[tauri::command]
+pub async fn navigate_window(
+    app: tauri::AppHandle,
+    label: String,
+    url: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window(&label) {
+        win.eval(format!(
+            "window.location.href = '{}';",
+            url.replace("'", "\\'")
+        ))
+        .map_err(|e| format!("Navigate failed: {}", e))?;
+    }
+    Ok(())
+}
+
+/// get_window_by_label — 检查窗口是否存在
+#[tauri::command]
+pub async fn get_window_by_label(app: tauri::AppHandle, label: String) -> Result<bool, String> {
+    use tauri::Manager;
+    Ok(app.get_webview_window(&label).is_some())
+}

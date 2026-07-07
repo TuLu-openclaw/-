@@ -1,0 +1,429 @@
+/**
+ * 使用情况页面 — 对接 OpenClaw Gateway sessions.usage API
+ * 展示 Token 用量、费用、Top Models/Providers/Tools/Agents 等分析数据
+ */
+import { wsClient } from '../lib/ws-client.js'
+import { api } from '../lib/tauri-api.js'
+import { icon } from '../lib/icons.js'
+import { t } from '../lib/i18n.js'
+
+let _page = null, _unsubReady = null
+let _loadSeq = 0
+let _usageSlowTimer = null
+let _usageProgressTimer = null
+
+export async function render() {
+  const page = document.createElement('div')
+  page.className = 'page'
+  _page = page
+
+  page.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">${t('usage.title')}</h1>
+      <p class="page-desc">${t('usage.desc')}</p>
+    </div>
+    <div class="usage-toolbar" style="display:flex;gap:8px;align-items:center;margin-bottom:var(--space-lg);flex-wrap:wrap">
+      <button class="btn btn-sm ${_days === 1 ? 'btn-primary' : 'btn-secondary'}" data-days="1">${t('usage.today')}</button>
+      <button class="btn btn-sm ${_days === 7 ? 'btn-primary' : 'btn-secondary'}" data-days="7">${t('usage.days7')}</button>
+      <button class="btn btn-sm ${_days === 30 ? 'btn-primary' : 'btn-secondary'}" data-days="30">${t('usage.days30')}</button>
+      <button class="btn btn-sm btn-secondary" id="btn-usage-refresh">${icon('refresh-cw', 14)} ${t('usage.refresh')}</button>
+    </div>
+    <div id="usage-content">
+      <div class="stat-card loading-placeholder" style="height:120px"></div>
+    </div>
+  `
+
+  page.querySelectorAll('[data-days]').forEach(btn => {
+    btn.onclick = () => {
+      _days = parseInt(btn.dataset.days)
+      page.querySelectorAll('[data-days]').forEach(b => { b.classList.remove('btn-primary'); b.classList.add('btn-secondary') })
+      btn.classList.remove('btn-secondary'); btn.classList.add('btn-primary')
+      loadUsage(page)
+    }
+  })
+  page.querySelector('#btn-usage-refresh')?.addEventListener('click', () => loadUsage(page, { requestRefresh: true }))
+
+  loadUsage(page)
+  return page
+}
+
+export function cleanup() {
+  _page = null
+  if (_unsubReady) { _unsubReady(); _unsubReady = null }
+  if (_usageSlowTimer) { clearTimeout(_usageSlowTimer); _usageSlowTimer = null }
+  if (_usageProgressTimer) { clearInterval(_usageProgressTimer); _usageProgressTimer = null }
+}
+
+let _days = 7
+
+async function loadUsage(page, options = {}) {
+  const el = page.querySelector('#usage-content')
+  if (!el) return
+  const seq = ++_loadSeq
+  if (_usageSlowTimer) { clearTimeout(_usageSlowTimer); _usageSlowTimer = null }
+  if (_usageProgressTimer) { clearInterval(_usageProgressTimer); _usageProgressTimer = null }
+  setUsageControlsBusy(page, true)
+  el.innerHTML = `<div class="stat-card loading-placeholder" style="height:120px"></div>
+    <div class="stat-card loading-placeholder" style="height:200px;margin-top:var(--space-md)"></div>
+    <div class="form-hint" id="usage-loading-hint" style="margin-top:var(--space-sm)">${options.requestRefresh ? t('usage.refreshing') : t('usage.loading')}</div>`
+
+  const loadingHintEl = () => el.querySelector('#usage-loading-hint')
+  _usageSlowTimer = setTimeout(() => {
+    if (seq !== _loadSeq || page !== _page || !page.isConnected || !el.isConnected) return
+    const hint = loadingHintEl()
+    if (hint) hint.textContent = '正在等待 Gateway 返回使用情况统计，这一步本身可能需要几十秒。'
+  }, 5000)
+  _usageProgressTimer = setInterval(() => {
+    if (seq !== _loadSeq || page !== _page || !page.isConnected || !el.isConnected) return
+    const hint = loadingHintEl()
+    if (!hint) return
+    const base = options.requestRefresh ? t('usage.refreshing') : t('usage.loading')
+    const elapsed = Math.max(1, Math.round((Date.now() - startMs) / 1000))
+    hint.textContent = `${base}（已等待 ${elapsed}s）`
+  }, 1000)
+  const startMs = Date.now()
+
+  if (!wsClient.connected) {
+    if (_usageSlowTimer) { clearTimeout(_usageSlowTimer); _usageSlowTimer = null }
+    if (_usageProgressTimer) { clearInterval(_usageProgressTimer); _usageProgressTimer = null }
+    setUsageControlsBusy(page, false)
+    el.innerHTML = `<div class="usage-empty">
+      <div style="color:var(--text-tertiary);margin-bottom:8px">${t('usage.gwConnecting')}</div>
+      <div class="form-hint">${t('usage.gwWait')}</div>
+    </div>`
+    // 自动等待连接就绪后重试
+    if (_unsubReady) _unsubReady()
+    _unsubReady = wsClient.onReady(() => {
+      if (_unsubReady) { _unsubReady(); _unsubReady = null }
+      if (_page?.isConnected) loadUsage(_page)
+    })
+    return
+  }
+
+  try {
+    const now = new Date()
+    const end = now.toISOString().slice(0, 10)
+    const start = new Date(now.getTime() - (_days - 1) * 86400000).toISOString().slice(0, 10)
+    const data = await requestUsageWithCacheRecovery({ startDate: start, endDate: end, limit: 60 })
+    if (seq !== _loadSeq || page !== _page || !page.isConnected || !el.isConnected) return
+    renderUsage(el, data)
+  } catch (e) {
+    if (seq !== _loadSeq || page !== _page || !page.isConnected || !el.isConnected) return
+    const message = String(e?.message || e || '')
+    const isTimeout = /超时|timeout/i.test(message)
+    const isCacheBusy = /usage-cost-cache\.json|EPERM|operation not permitted|rename/i.test(message)
+    const isUnsupported = /not found|unknown method|unsupported|method/i.test(message)
+    const hint = isCacheBusy ? t('usage.cacheBusyHint') : (isTimeout ? t('usage.loadTimeoutHint') : (isUnsupported ? t('usage.loadUnsupportedHint') : t('usage.loadFailedHint')))
+    const title = isCacheBusy ? t('usage.cacheBusy') : (isTimeout ? t('usage.loadTimeout') : t('usage.loadFailed'))
+    const detail = isCacheBusy ? t('usage.cacheBusyDetail') : esc(message || t('common.unknown'))
+    el.innerHTML = `<div class="usage-empty">
+      <div style="color:var(--error);margin-bottom:8px">${title}: ${detail}</div>
+      <div class="form-hint">${hint}</div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" id="btn-usage-retry">${t('usage.retry')}</button>
+    </div>`
+    el.querySelector('#btn-usage-retry')?.addEventListener('click', () => loadUsage(page, { requestRefresh: true }))
+  } finally {
+    if (_usageSlowTimer) { clearTimeout(_usageSlowTimer); _usageSlowTimer = null }
+    if (_usageProgressTimer) { clearInterval(_usageProgressTimer); _usageProgressTimer = null }
+    if (seq === _loadSeq && page === _page && page.isConnected) setUsageControlsBusy(page, false)
+  }
+}
+
+function setUsageControlsBusy(page, busy) {
+  page.querySelectorAll('.usage-toolbar button').forEach(button => {
+    button.disabled = busy
+    button.setAttribute('aria-busy', busy ? 'true' : 'false')
+  })
+}
+
+async function requestUsageWithCacheRecovery(params) {
+  try {
+    return await wsClient.request('sessions.usage', params, { timeoutMs: 90000 })
+  } catch (e) {
+    const message = String(e?.message || e || '')
+    const isCacheEperm = /usage-cost-cache\.json|EPERM|operation not permitted|rename/i.test(message)
+    if (!isCacheEperm || !api?.clearUsageCostCache) throw e
+    await api.clearUsageCostCache().catch(() => null)
+    try {
+      return await wsClient.request('sessions.usage', params, { timeoutMs: 90000 })
+    } catch (retryError) {
+      retryError.usageCacheRecovered = true
+      throw retryError
+    }
+  }
+}
+
+function renderUsage(el, data) {
+  if (!data) { el.innerHTML = `<div class="usage-empty">${t('usage.noData')}</div>`; return }
+
+  const totals = { ...(data.totals || {}), totalCost: data.totals?.totalCost ?? data.totalCost ?? data.cost ?? data.amount ?? data.usd ?? data.costUsd ?? data.costUSD }
+  if (!totals.totalTokens) totals.totalTokens = (Number(totals.input) || 0) + (Number(totals.output) || 0) + (Number(totals.cacheRead) || 0) + (Number(totals.cacheWrite) || 0)
+  const a = data.aggregates || {}
+  const msgs = a.messages || {}
+  const tools = a.tools || {}
+
+  const numberFrom = (...values) => {
+    for (const value of values) {
+      if (value == null || value === '') continue
+      const normalized = typeof value === 'string' ? value.replace(/[^0-9.+-]/g, '') : value
+      const n = Number(normalized)
+      if (Number.isFinite(n)) return n
+    }
+    return 0
+  }
+  const pickCost = (obj = {}, keys = []) => numberFrom(
+    ...keys.map(key => obj?.[key]),
+    ...keys.map(key => obj?.costs?.[key]),
+    ...keys.map(key => obj?.cost?.[key]),
+    ...keys.map(key => obj?.usage?.[key]),
+  )
+  const getTotalCost = (obj = {}) => {
+    const direct = pickCost(obj, ['totalCost', 'cost', 'total', 'amount', 'usd', 'costUsd', 'costUSD', 'totalUsd', 'totalUSD'])
+    if (direct > 0) return direct
+    return pickCost(obj, ['inputCost', 'promptCost', 'inputUsd', 'inputUSD']) + pickCost(obj, ['outputCost', 'completionCost', 'outputUsd', 'outputUSD'])
+  }
+  const getInputCost = (obj = {}) => pickCost(obj, ['inputCost', 'promptCost', 'inputUsd', 'inputUSD'])
+  const getOutputCost = (obj = {}) => pickCost(obj, ['outputCost', 'completionCost', 'outputUsd', 'outputUSD'])
+  const sumCosts = (items = [], mapper = item => item) => items.reduce((sum, item) => sum + getTotalCost(mapper(item) || {}), 0)
+  const sessions = data.sessions || []
+  const sessionCostFallback = sumCosts(sessions, s => ({ ...(s.usage || {}), cost: s.cost, totalCost: s.usage?.totalCost ?? s.totalCost }))
+  const modelCostFallback = sumCosts(a.byModel || [], item => item.totals || item)
+  const providerCostFallback = sumCosts(a.byProvider || [], item => item.totals || item)
+  const totalCost = getTotalCost(totals) || sessionCostFallback || modelCostFallback || providerCostFallback
+  const inputCost = getInputCost(totals)
+  const outputCost = getOutputCost(totals)
+  const missingCostEntries = numberFrom(totals.missingCostEntries, data.missingCostEntries)
+    || sessions.reduce((sum, s) => sum + numberFrom(s?.usage?.missingCostEntries, s?.missingCostEntries), 0)
+  const pricingFingerprintText = String(data.pricingFingerprint || data.cacheStatus?.pricingFingerprint || data.costPricingFingerprint || '')
+  const pricingEntries = (() => {
+    try {
+      const parsed = JSON.parse(pricingFingerprintText || '{}')
+      return [
+        ...(parsed.gatewayPricing || []),
+        ...(parsed.configuredRaw || []),
+        ...(parsed.configuredNormalized || []),
+      ]
+    } catch {
+      return []
+    }
+  })()
+  const zeroPricedProviders = Array.from(new Set(pricingEntries
+    .filter(([key, price]) => key && price && Number(price.input || 0) <= 0 && Number(price.output || 0) <= 0 && Number(price.cacheRead || 0) <= 0 && Number(price.cacheWrite || 0) <= 0)
+    .map(([key]) => String(key).split('/')[0])
+    .filter(Boolean)))
+  const visibleTokenItems = [totals, ...(a.byModel || []).map(x => x.totals || x), ...(sessions || []).map(x => x.usage || x)]
+  const hasTokens = visibleTokenItems.some(item => numberFrom(item?.totalTokens, item?.input, item?.output, item?.cacheRead, item?.cacheWrite) > 0)
+  const hasAnyCost = [totals, ...(a.byModel || []).map(x => x.totals || x), ...(a.byProvider || []).map(x => x.totals || x), ...(sessions || []).map(x => x.usage || x)]
+    .some(item => getTotalCost(item || {}) > 0 || getInputCost(item || {}) > 0 || getOutputCost(item || {}) > 0)
+  const costUnavailable = hasTokens && !hasAnyCost
+  const missingCostCount = missingCostEntries || sessions.reduce((sum, item) => sum + numberFrom(item?.usage?.countedRecords, item?.usage?.messageCounts?.assistant, item?.messageCounts?.assistant), 0) || (costUnavailable ? 1 : 0)
+  const fmtCostOrMissing = (n, item = null) => {
+    const itemHasCost = item && (getTotalCost(item) > 0 || getInputCost(item) > 0 || getOutputCost(item) > 0)
+    return (costUnavailable && !itemHasCost) ? t('usage.costNotConfiguredShort') : fmtCost(n)
+  }
+
+  const fmtTokens = (n) => {
+    if (n == null || n === 0) return '0'
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'
+    return String(n)
+  }
+  const fmtCost = (n) => {
+    const value = Number(n)
+    if (!Number.isFinite(value) || value <= 0) return '$0.0000'
+    const decimals = value < 0.0001 ? 8 : (value < 0.01 ? 6 : 4)
+    return '$' + value.toFixed(decimals)
+  }
+  const fmtRate = (errors, total) => {
+    if (!total) return '—'
+    const pct = (errors / total * 100).toFixed(1)
+    return pct + '%'
+  }
+
+  // ── 概览卡片 ──
+  const overviewHtml = `
+    <div class="stat-cards" style="margin-bottom:var(--space-lg)">
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.messages')}</span></div>
+        <div class="stat-card-value">${msgs.total || 0}</div>
+        <div class="stat-card-meta">${msgs.user || 0} ${t('usage.userMsgs')} · ${msgs.assistant || 0} ${t('usage.assistantMsgs')}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.toolCalls')}</span></div>
+        <div class="stat-card-value">${tools.totalCalls || 0}</div>
+        <div class="stat-card-meta">${t('usage.toolKinds', { count: tools.uniqueTools || 0 })}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.errors')}</span></div>
+        <div class="stat-card-value">${msgs.errors || 0}</div>
+        <div class="stat-card-meta">${t('usage.errorRate')} ${fmtRate(msgs.errors, msgs.total)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.totalTokens')}</span></div>
+        <div class="stat-card-value">${fmtTokens(totals.totalTokens)}</div>
+        <div class="stat-card-meta">${fmtTokens(totals.input)} ${t('usage.input')} · ${fmtTokens(totals.output)} ${t('usage.output')}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.cost')}</span></div>
+        <div class="stat-card-value">${fmtCostOrMissing(totalCost)}</div>
+        <div class="stat-card-meta">${costUnavailable ? t('usage.costNotConfiguredMeta') : `${fmtCost(inputCost)} ${t('usage.input')} · ${fmtCost(outputCost)} ${t('usage.output')}`}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header"><span class="stat-card-label">${t('usage.sessions')}</span></div>
+        <div class="stat-card-value">${(data.sessions || []).length}</div>
+        <div class="stat-card-meta">${data.startDate || ''} ~ ${data.endDate || ''}</div>
+      </div>
+    </div>
+  `
+
+  // ── Top 排行 ──
+  const renderTop = (title, items, keyFn, valueFn) => {
+    if (!items || !items.length) return ''
+    const rows = items.map(item => {
+      const name = esc(keyFn(item))
+      const value = esc(valueFn(item))
+      return `
+        <div class="usage-top-row">
+          <span class="usage-top-row-name" title="${escAttr(keyFn(item))}">${name}</span>
+          <span class="usage-top-row-value" title="${escAttr(valueFn(item))}">${value}</span>
+        </div>
+      `
+    }).join('')
+    return `
+      <div class="usage-top-card">
+        <div class="usage-top-title">${title}</div>
+        ${rows}
+      </div>
+    `
+  }
+
+  const topModels = renderTop(t('usage.topModels'),
+    a.byModel, m => m.model || t('usage.unknownModel'), m => fmtCostOrMissing(getTotalCost(m.totals || m), m.totals || m) + ' · ' + fmtTokens(m.totals?.totalTokens || m.totalTokens))
+  const topProviders = renderTop(t('usage.topProviders'),
+    a.byProvider, p => p.provider || t('usage.unknownProvider'), p => fmtCostOrMissing(getTotalCost(p.totals || p), p.totals || p) + ' · ' + t('usage.times', { count: p.count }))
+  const topTools = renderTop(t('usage.topTools'),
+    (tools.tools || []), item => item.name, item => t('usage.timesCall', { count: item.count }))
+  const topAgents = renderTop(t('usage.topAgents'),
+    a.byAgent, item => item.agentId || 'main', item => fmtCostOrMissing(getTotalCost(item.totals || item), item.totals || item))
+  const topChannels = renderTop(t('usage.topChannels'),
+    a.byChannel, c => c.channel || 'webchat', c => fmtCostOrMissing(getTotalCost(c.totals || c), c.totals || c))
+  const projectRows = buildProjectRows(data, sessions, getTotalCost)
+  const topProjects = renderTop(t('usage.topProjects'),
+    projectRows, p => p.name, p => fmtCostOrMissing(p.cost, p) + ' · ' + fmtTokens(p.tokens || 0))
+
+  const costNoticeHtml = costUnavailable ? `<div class="usage-empty" style="margin-bottom:var(--space-lg);text-align:left"><strong>${t('usage.costNotConfiguredTitle')}</strong><div class="form-hint">${t('usage.costNotConfiguredHint', { count: missingCostCount })}${zeroPricedProviders.length ? ' ' + t('usage.zeroPricedProviders', { providers: zeroPricedProviders.join(', ') }) : ''}</div></div>` : ''
+  const topsHtml = `<div class="usage-tops-grid">${topModels}${topProviders}${topTools}${topAgents}${topChannels}${topProjects}</div>`
+
+  // ── Token 分类 ──
+  const tokenBreakdownHtml = `
+    <div class="config-section" style="margin-top:var(--space-lg)">
+      <div class="config-section-title">${t('usage.tokenBreakdown')}</div>
+      <div style="display:flex;gap:var(--space-lg);flex-wrap:wrap;padding:var(--space-md)">
+        <div><span style="display:inline-block;width:10px;height:10px;background:var(--error);border-radius:2px;margin-right:6px"></span>${t('usage.outputTokens')} ${fmtTokens(totals.output)}</div>
+        <div><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:6px"></span>${t('usage.inputTokens')} ${fmtTokens(totals.input)}</div>
+        <div><span style="display:inline-block;width:10px;height:10px;background:var(--success);border-radius:2px;margin-right:6px"></span>${t('usage.cacheRead')} ${fmtTokens(totals.cacheRead)}</div>
+        <div><span style="display:inline-block;width:10px;height:10px;background:var(--warning);border-radius:2px;margin-right:6px"></span>${t('usage.cacheWrite')} ${fmtTokens(totals.cacheWrite)}</div>
+      </div>
+    </div>
+  `
+
+  // ── 每日用量 ──
+  const daily = a.daily || []
+  let dailyHtml = ''
+  if (daily.length > 0) {
+    const maxTokens = Math.max(...daily.map(d => d.tokens || 0), 1)
+    const bars = daily.map(d => {
+      const pct = Math.max(1, Math.round((d.tokens || 0) / maxTokens * 100))
+      const date = (d.date || '').slice(5) // MM-DD
+      return `<div class="usage-daily-bar-wrap" title="${escAttr(t('usage.dailyBarTitle', {
+        date: d.date,
+        tokens: fmtTokens(d.tokens),
+        count: d.messages || 0,
+      }))}">
+        <div class="usage-daily-bar" style="height:${pct}%"></div>
+        <div class="usage-daily-label">${esc(date)}</div>
+      </div>`
+    }).join('')
+    dailyHtml = `
+      <div class="config-section" style="margin-top:var(--space-lg)">
+        <div class="config-section-title">${t('usage.dailyUsage')}</div>
+        <div class="usage-daily-chart">${bars}</div>
+      </div>
+    `
+  }
+
+  // ── 会话列表 ──
+  let sessionsHtml = ''
+  if (sessions.length > 0) {
+    const detailSessions = sessions.slice(0, 40)
+    const rows = detailSessions.map(s => {
+      const u = s.usage || {}
+      const key = esc(s.key || '').replace(/^agent:main:/, '')
+      const model = s.model || u.modelUsage?.[0]?.model || ''
+      const provider = u.modelUsage?.[0]?.provider || s.modelProvider || ''
+      const sessionCost = getTotalCost({ ...u, cost: s.cost, totalCost: u.totalCost ?? s.totalCost })
+      const metaText = t('usage.sessionMeta', {
+        tokens: fmtTokens(u.totalTokens),
+        cost: fmtCostOrMissing(sessionCost, u),
+        count: u.messageCounts?.total || 0,
+      }) + (u.messageCounts?.errors ? ' · ' + t('usage.errorCount', { count: u.messageCounts.errors }) : '')
+      return `<div class="session-row">
+        <div class="session-row-header">
+          <span class="session-key" title="${escAttr(s.key || '')}">${key || esc(s.sessionId?.slice(0, 12) || '—')}</span>
+          ${s.agentId ? `<span class="session-flag">${esc(s.agentId)}</span>` : ''}
+          ${model ? `<span class="session-model">${esc(model)}</span>` : ''}
+          ${provider ? `<span class="session-flag">${esc(provider)}</span>` : ''}
+        </div>
+        <div class="session-row-meta">${esc(metaText)}</div>
+      </div>`
+    }).join('')
+    sessionsHtml = `
+      <div class="config-section" style="margin-top:var(--space-lg)">
+        <div class="config-section-title">${t('usage.sessionDetail')} <span style="font-weight:normal;color:var(--text-tertiary);font-size:var(--font-size-xs)">${t('usage.recentN', { count: detailSessions.length })}</span></div>
+        <div class="session-list">${rows}</div>
+      </div>
+    `
+  }
+
+  el.innerHTML = overviewHtml + costNoticeHtml + topsHtml + tokenBreakdownHtml + dailyHtml + sessionsHtml
+}
+
+function buildProjectRows(data, sessions, getTotalCost) {
+  const direct = data?.aggregates?.byProject || data?.byProject || data?.projects || []
+  if (Array.isArray(direct) && direct.length) {
+    return direct.map(item => ({
+      name: projectNameFrom(item?.project || item?.name || item?.workspace || item?.cwd || item?.path || item?.root || item?.repo || item?.key || t('usage.unknownProject')),
+      cost: getTotalCost(item?.totals || item),
+      tokens: Number(item?.totals?.totalTokens ?? item?.totalTokens ?? item?.tokens ?? 0) || 0,
+    })).filter(item => item.name)
+  }
+
+  const byProject = new Map()
+  for (const session of sessions || []) {
+    const usage = session?.usage || {}
+    const rawProject = session?.project || session?.projectName || session?.workspace || session?.cwd || session?.repoPath || usage?.project || usage?.workspace || usage?.cwd
+    const name = projectNameFrom(rawProject)
+    if (!name) continue
+    const current = byProject.get(name) || { name, cost: 0, tokens: 0 }
+    current.cost += getTotalCost({ ...usage, cost: session?.cost, totalCost: usage?.totalCost ?? session?.totalCost })
+    current.tokens += Number(usage?.totalTokens ?? session?.totalTokens ?? 0) || 0
+    byProject.set(name, current)
+  }
+  return Array.from(byProject.values()).sort((a, b) => (b.cost - a.cost) || (b.tokens - a.tokens)).slice(0, 8)
+}
+
+function projectNameFrom(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  const normalized = text.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  return parts[parts.length - 1] || text || t('usage.unknownProject')
+}
+
+function esc(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function escAttr(str) {
+  return esc(str).replace(/"/g, '&quot;')
+}

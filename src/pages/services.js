@@ -1,0 +1,1369 @@
+﻿/**
+ * 服务管理页面
+ * 服务启停 + 更新检测 + 配置备份管理
+ */
+import { api, invoke } from '../lib/tauri-api.js'
+import { toast } from '../components/toast.js'
+import { showConfirm, showContentModal, showUpgradeModal } from '../components/modal.js'
+import { isMacPlatform, isInDocker, setUpgrading, setUserStopped, resetAutoRestart, getGatewayHealthState, refreshGatewayStatus, getActiveInstance, boostGatewayPolling } from '../lib/app-state.js'
+import { wsClient } from '../lib/ws-client.js'
+import { classifyGatewayRuntime, formatGatewayReconnectStateLabel, buildGatewayStartFailureDiagnosis, renderGatewayStartFailureDiagnosisHtml } from '../lib/gateway-runtime-state.js'
+import { isForeignGatewayError, isForeignGatewayService, maybeShowForeignGatewayBindingPrompt, showGatewayConflictGuidance } from '../lib/gateway-ownership.js'
+import { diagnoseInstallError } from '../lib/error-diagnosis.js'
+import { icon, statusIcon } from '../lib/icons.js'
+import { t } from '../lib/i18n.js'
+
+function formatGatewayReconnectState(state) {
+  return formatGatewayReconnectStateLabel(state, t, 'services')
+}
+
+function formatGatewayWsPhase(status) {
+  const raw = String(status || '').trim()
+  const key = raw.toLowerCase()
+  const labels = {
+    idle: t('services.wsPhaseIdle'),
+    connecting: t('services.wsPhaseConnecting'),
+    connected: t('services.wsPhaseConnected'),
+    ready: t('services.wsPhaseReady'),
+    reconnecting: t('services.wsPhaseReconnecting'),
+    disconnected: t('services.wsPhaseDisconnected'),
+    error: t('services.wsPhaseError'),
+    auth_failed: t('services.wsPhaseAuthFailed'),
+  }
+  if (labels[key]) return labels[key]
+  const zhLabels = {
+    '正在连接网关': t('services.wsPhaseConnecting'),
+    '等待握手指令': t('services.wsPhaseWaitingHandshake'),
+    '握手超时，正在主动补发连接': t('services.wsPhaseHandshakeRetry'),
+    '正在自动修复连接': t('services.wsPhaseAutoFixing'),
+    '连接失败': t('services.wsPhaseError'),
+    '连接已断开': t('services.wsPhaseDisconnected'),
+    '正在生成身份验证信息': t('services.wsPhaseAuthenticating'),
+    '已收到握手指令': t('services.wsPhaseAuthenticating'),
+    '正在发送握手信息': t('services.wsPhaseAuthenticating'),
+    '未收到握手指令，主动发送连接信息': t('services.wsPhaseHandshakeRetry'),
+    '握手信息生成失败': t('services.wsPhaseHandshakeFailed'),
+    '网关连接异常': t('services.wsPhaseError'),
+    '认证失败': t('services.wsPhaseAuthFailed'),
+    '正在刷新 Gateway Token': t('services.wsPhaseAuthRefreshing'),
+    'Gateway Token 已刷新': t('services.wsPhaseAuthRefreshed'),
+    '握手失败': t('services.wsPhaseHandshakeFailed'),
+    '自动修复失败': t('services.wsPhaseAutoFixFailed'),
+    '重连次数过多': t('services.wsPhaseReconnectExhausted'),
+    '网关连接已就绪': t('services.wsPhaseReady'),
+    '网关已就绪': t('services.wsPhaseReady'),
+  }
+  return zhLabels[raw] || raw || t('common.unknown')
+}
+
+function formatGatewayWsDetail(detail) {
+  const raw = String(detail || '').trim()
+  if (!raw) return ''
+  const endpoint = raw.match(/^wss?:\/\//i) ? raw : null
+  if (endpoint) return t('services.wsDetailEndpoint', { endpoint })
+  if (/^agent:[^\s]+/i.test(raw)) return t('services.wsDetailSession', { session: raw })
+  const reconnectMatch = raw.match(/^第\s*(\d+)\/(\d+)\s*次重连，\s*(\d+)\s*秒后重试$/)
+  if (reconnectMatch) {
+    return t('services.wsDetailReconnectScheduled', {
+      current: reconnectMatch[1],
+      total: reconnectMatch[2],
+      seconds: reconnectMatch[3],
+    })
+  }
+  const autoPairMatch = raw.match(/^正在执行自动配对（第\s*(\d+)\s*次）$/)
+  if (autoPairMatch) return t('services.wsDetailAutoPairing', { count: autoPairMatch[1] })
+  const pairingFailed = raw.match(/^配对失败[:：]\s*(.+)$/)
+  if (pairingFailed) return t('services.wsDetailPairingFailed', { reason: pairingFailed[1] })
+  const zhDetails = {
+    '等待网关下发 connect.challenge': t('services.wsDetailWaitingChallenge'),
+    '网关未及时返回握手指令，客户端正在主动发起连接': t('services.wsDetailChallengeFallback'),
+    'Gateway Token 不匹配，自动刷新失败；请点击“修复并重连”重新同步本地配置': t('services.wsDetailAuthRefreshFailed'),
+    '检测到来源限制，正在重新配对并重连': t('services.wsDetailOriginPairing'),
+    '来源受限，请点击修复并重连': t('services.wsDetailOriginBlocked'),
+    '来源受限，请点击“修复并重连”': t('services.wsDetailOriginBlocked'),
+    'WebSocket 发生异常，请稍后重试': t('services.wsDetailSocketError'),
+    '正在生成身份验证信息': t('services.wsDetailGeneratingAuth'),
+    '检测到认证失败，正在重新读取本地 Gateway 配置并重连': t('services.wsDetailAuthRefreshing'),
+    '已读取最新本地 token，正在重连': t('services.wsDetailTokenRefreshed'),
+    '正在发送带签名的 connect frame': t('services.wsDetailSendingSignedConnect'),
+    '正在发送带签名的连接帧': t('services.wsDetailSendingSignedConnect'),
+    '网关未返回 challenge，客户端主动发起连接': t('services.wsDetailSendingFallbackConnect'),
+    'WebSocket 未处于可发送状态': t('services.wsDetailSocketNotSendable'),
+    '已停止自动重连，请手动刷新页面重试': t('services.wsDetailReconnectExhausted'),
+  }
+  return zhDetails[raw] || raw
+}
+
+let _servicesWsEnsureInFlight = false
+
+async function ensureServicesWebSocket() {
+  const state = getGatewayHealthState()
+  const info = typeof wsClient?.getConnectionInfo === 'function' ? wsClient.getConnectionInfo() : {}
+  if (!state.running || state.foreign || info.connected || info.gatewayReady || info.connecting || info.handshaking || info.reconnectState === 'attempting' || info.reconnectState === 'scheduled') return
+  if (_servicesWsEnsureInFlight) return
+  _servicesWsEnsureInFlight = true
+  try {
+    const config = await api.readOpenclawConfig().catch(() => ({}))
+    const port = config?.gateway?.port || 18789
+    const rawToken = config?.gateway?.auth?.token ?? config?.gateway?.authToken
+    const token = typeof rawToken === 'string' ? rawToken : ''
+    const inst = getActiveInstance()
+    let host
+    if (inst?.type !== 'local' && inst?.endpoint) {
+      try {
+        const url = new URL(inst.endpoint)
+        host = `${url.hostname}:${inst.gatewayPort || port}`
+      } catch {
+        host = `127.0.0.1:${port}`
+      }
+    } else {
+      host = `127.0.0.1:${port}`
+    }
+    boostGatewayPolling()
+    wsClient.connect(host, token)
+  } catch (e) {
+    console.warn('[services] ensure websocket failed:', e)
+  } finally {
+    _servicesWsEnsureInFlight = false
+  }
+}
+
+// HTML 转义，防止 XSS
+function getGatewayUiSnapshot(service) {
+  const state = getGatewayHealthState()
+  const wsInfo = typeof wsClient?.getConnectionInfo === 'function' ? wsClient.getConnectionInfo() : {}
+  const runtime = classifyGatewayRuntime({ service, gatewayState: state, wsInfo })
+  const reconnectState = runtime.reconnectState || 'idle'
+  const reconnectLabel = formatGatewayReconnectState(reconnectState)
+  const gatewayReady = runtime.gatewayReady
+  const wsConnected = runtime.wsConnected
+  const lastCheckLabel = state?.lastCheckAt ? new Date(state.lastCheckAt).toLocaleTimeString() : t('common.unknown')
+
+  let tone = 'stopped'
+  let statusText = t('services.stop')
+  if (runtime.foreign) {
+    tone = 'warning'
+    statusText = t('services.gatewayForeign')
+  } else if (runtime.ready) {
+    tone = 'running'
+    statusText = t('services.gatewayReady')
+  } else if (runtime.phase === 'recovering') {
+    tone = 'loading'
+    statusText = t('services.gatewayRecovering')
+  } else if (runtime.phase === 'process_starting' || runtime.phase === 'ws_connecting' || runtime.phase === 'handshaking') {
+    tone = 'loading'
+    statusText = t('services.gatewayStarting')
+  } else if (runtime.degraded) {
+    tone = 'warning'
+    statusText = reconnectState === 'scheduled' || reconnectState === 'attempting'
+      ? t('services.gatewayReconnect')
+      : t('services.gatewayDegraded')
+  } else if (runtime.processRunning) {
+    tone = 'warning'
+    statusText = t('services.gatewayDegraded')
+  }
+
+  const phaseDetail = formatGatewayWsDetail(wsInfo?.statusDetail)
+  const details = [
+    t('services.gatewayDetailStatus', { status: statusText }),
+    t('services.gatewayDetailWs', { status: wsConnected ? t('services.connected') : t('services.notConnected') }),
+    t('services.gatewayDetailHandshake', { status: gatewayReady ? t('services.completed') : t('services.notCompleted') }),
+    t('services.gatewayDetailPhase', { phase: formatGatewayWsPhase(wsInfo?.phase || wsInfo?.status) }),
+    ...(phaseDetail ? [t('services.gatewayDetailReason', { reason: phaseDetail })] : []),
+    t('services.gatewayDetailReconnect', { state: reconnectLabel }),
+    t('services.gatewayDetailLastCheck', { time: lastCheckLabel }),
+  ]
+
+  return { tone, statusText, details: details.join(' · '), state, wsInfo, runtime }
+}
+
+function escapeHtml(str) {
+  if (!str) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+export async function render() {
+  const page = document.createElement('div')
+  page.className = 'page'
+
+  page.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">${t('services.title')}</h1>
+      <p class="page-desc">${t('services.desc')}</p>
+    </div>
+    <div id="version-bar"><div class="stat-card loading-placeholder" style="height:80px;margin-bottom:var(--space-lg)"></div></div>
+    <div id="services-list"><div class="stat-card loading-placeholder" style="height:64px"></div></div>
+    <div class="config-section" id="docker-manager-section">
+      <div class="config-section-title">${t('services.dockerManager')}</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.dockerManagerHint')}</div>
+      <div id="docker-manager-bar"><div class="stat-card loading-placeholder" style="height:96px"></div></div>
+    </div>
+    <div class="config-section" id="config-editor-section" style="display:none">
+      <div class="config-section-title">${t('services.configEditor')}</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.configEditorHint')}</div>
+      <div style="display:flex;gap:8px;margin-bottom:var(--space-sm)">
+        <button class="btn btn-primary btn-sm" data-action="save-config" disabled>${t('services.saveAndRestart')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="save-config-only" disabled>${t('services.saveOnly')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="reload-config">${t('services.reloadConfig')}</button>
+      </div>
+      <div id="config-editor-status" style="font-size:var(--font-size-xs);margin-bottom:6px;min-height:18px"></div>
+      <textarea id="config-editor-area" class="form-input" style="font-family:var(--font-mono);font-size:12px;min-height:320px;resize:vertical;tab-size:2;white-space:pre;overflow-x:auto" spellcheck="false" disabled></textarea>
+    </div>
+    <div class="config-section" id="config-calibration-section">
+      <div class="config-section-title">${t('services.configCalibration')}</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.configCalibrationHint')}</div>
+      <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-bottom:var(--space-sm)">
+        <button class="btn btn-primary btn-sm" data-action="calibrate-config-inherit">${t('services.calibrateInherit')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="calibrate-config-reset">${t('services.calibrateReset')}</button>
+      </div>
+      <div style="display:grid;gap:8px;margin-bottom:var(--space-sm)">
+        <div class="setup-inline-note">${t('services.calibrateInheritHint')}</div>
+        <div class="setup-inline-note">${t('services.calibrateResetHint')}</div>
+      </div>
+      <div id="config-calibration-status" style="font-size:var(--font-size-xs);min-height:18px;color:var(--text-tertiary)"></div>
+    </div>
+    <div class="config-section" id="backup-section">
+      <div class="config-section-title">${t('services.configBackup')}</div>
+      <div class="form-hint" style="margin-bottom:var(--space-sm)">${t('services.configBackupHint')}</div>
+      <div id="backup-actions" style="margin-bottom:var(--space-md)">
+        <button class="btn btn-primary btn-sm" data-action="create-backup">${t('services.createBackup')}</button>
+      </div>
+      <div id="backup-list"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
+    </div>
+  `
+
+  bindEvents(page)
+  loadAll(page).catch(e => console.warn('[services] initial load failed:', e))
+  return page
+}
+
+async function loadAll(page) {
+  if (!page?.isConnected) return
+
+  markSectionBooting(page.querySelector('#version-bar'), '正在初始化版本信息模块…')
+  markSectionBooting(page.querySelector('#services-list'), '正在初始化服务状态模块…')
+  markSectionBooting(page.querySelector('#docker-manager-bar'), '正在初始化 Docker 管理模块…')
+  markSectionBooting(page.querySelector('#backup-list'), '正在初始化备份模块…')
+  const configStatus = page.querySelector('#config-editor-status')
+  if (configStatus) configStatus.innerHTML = '<span style="color:var(--text-tertiary)">正在初始化配置编辑器模块…</span>'
+
+  await Promise.all([
+    loadVersion(page).catch(e => console.warn('[services] loadVersion failed:', e)),
+    loadServices(page).catch(e => console.warn('[services] loadServices failed:', e)),
+  ])
+  if (!page?.isConnected) return
+  setTimeout(() => {
+    if (!page?.isConnected) return
+    loadDockerManager(page).catch(e => console.warn('[services] loadDockerManager failed:', e))
+    loadBackups(page).catch(e => console.warn('[services] loadBackups failed:', e))
+    loadConfigEditor(page).catch(e => console.warn('[services] loadConfigEditor failed:', e))
+  }, 0)
+}
+
+function setSectionSlowState(target, message) {
+  if (!target) return
+  target.innerHTML = `<div class="stat-card"><div class="stat-card-meta">${escapeHtml(message)}</div></div>`
+}
+
+function markSectionBooting(target, message) {
+  if (!target) return
+  target.innerHTML = `<div class="stat-card"><div class="stat-card-meta">${escapeHtml(message)}</div></div>`
+}
+
+function startSlowHint(target, message, delay = 8000) {
+  if (!target) return () => {}
+  let done = false
+  const timer = setTimeout(() => {
+    if (done) return
+    setSectionSlowState(target, message)
+  }, delay)
+  return () => {
+    done = true
+    clearTimeout(timer)
+  }
+}
+
+// ===== 版本检测 =====
+
+// 后端检测到的当前安装源
+let detectedSource = 'chinese'
+let lastVersionInfo = null
+
+async function loadVersion(page) {
+  const bar = page.querySelector('#version-bar')
+  if (!bar) return
+  const stopSlowHint = startSlowHint(bar, '版本信息加载较慢，仍在继续读取本地版本与更新信息…', 8000)
+  try {
+    const [info, panelConfig] = await Promise.all([
+      invoke('get_version_info_local', {}, 15000).catch(() => ({
+        current: null,
+        latest: null,
+        recommended: null,
+        update_available: false,
+        latest_update_available: false,
+        is_recommended: false,
+        ahead_of_recommended: false,
+        panel_version: '0.0.0',
+        source: 'unknown',
+        cli_path: null,
+        cli_source: null,
+        all_installations: [],
+      })),
+      api.readPanelConfig().catch(() => ({})),
+    ])
+    stopSlowHint()
+    lastVersionInfo = info
+    detectedSource = info.source || 'chinese'
+    const ver = info.current || t('common.unknown')
+    const hasRecommended = !!info.recommended
+    const aheadOfRecommended = !!info.current && hasRecommended && !!info.ahead_of_recommended
+    const driftFromRecommended = !!info.current && hasRecommended && !info.is_recommended && !aheadOfRecommended
+    const isChinese = detectedSource === 'chinese'
+    const sourceTag = isChinese ? t('services.chineseEdition') : t('services.officialEdition')
+    const switchLabel = isChinese ? t('services.switchToOfficial') : t('services.switchToChinese')
+    const switchTarget = isChinese ? 'official' : 'chinese'
+    const dockerImage = (panelConfig?.dockerDefaultImage || '').trim() || 'ghcr.io/qingchencloud/openclaw'
+    const policyNote = aheadOfRecommended
+      ? t('services.policyAhead', { ver, recommended: info.recommended })
+      : t('services.policyDefault')
+
+    if (isInDocker()) {
+      bar.innerHTML = `
+        <div class="stat-cards" style="margin-bottom:var(--space-lg)">
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-card-label">${t('services.currentVersion')} · <span style="color:var(--accent)">${t('services.dockerDeploy')}</span></span>
+            </div>
+            <div class="stat-card-value">${ver}</div>
+            <div class="stat-card-meta">${info.latest_update_available ? t('services.latestUpstreamWithAction', { version: info.latest, action: t('services.pullNewImage') }) : t('services.currentImageVer')}</div>
+            ${info.latest_update_available ? `<div style="margin-top:var(--space-sm)">
+              <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;user-select:all">${escapeHtml(`docker pull ${dockerImage}:latest`)}</code>
+            </div>` : ''}
+          </div>
+        </div>
+      `
+    } else {
+      bar.innerHTML = `
+        <div class="stat-cards" style="margin-bottom:var(--space-lg)">
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-card-label">${t('services.currentVersion')} · <span style="color:var(--accent)">${sourceTag}</span></span>
+            </div>
+            <div class="stat-card-value">${ver}</div>
+            <div class="stat-card-meta">
+              ${hasRecommended
+                ? (aheadOfRecommended ? t('services.aheadOfRecommended', { version: info.recommended }) : driftFromRecommended ? t('services.recommendedStable', { version: info.recommended }) : t('services.alignedRecommended', { version: info.recommended }))
+                : t('services.noRecommended')}
+              ${info.latest_update_available && info.latest ? ' · ' + t('services.latestUpstream', { version: info.latest }) : ''}
+            </div>
+            <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);flex-wrap:wrap">
+              ${aheadOfRecommended ? `<button class="btn btn-primary btn-sm" data-action="upgrade">${t('services.rollbackToRecommended')}</button>` : driftFromRecommended ? `<button class="btn btn-primary btn-sm" data-action="upgrade">${t('services.switchToRecommended')}</button>` : ''}
+              <button class="btn btn-secondary btn-sm" data-action="switch-source" data-source="${switchTarget}">${switchLabel}</button>
+            </div>
+            <div style="margin-top:8px;font-size:var(--font-size-xs);color:var(--text-tertiary);line-height:1.6">
+              ${policyNote}
+            </div>
+          </div>
+        </div>
+      `
+    }
+  } catch (e) {
+    stopSlowHint()
+    bar.innerHTML = `<div class="stat-card" style="margin-bottom:var(--space-lg)"><div class="stat-card-label">${t('services.versionLoadFailed')}</div><div class="stat-card-meta" style="margin-top:8px">${escapeHtml(e?.message || e || '')}</div></div>`
+  }
+}
+
+function configuredDockerImage(panelConfig) {
+  return (panelConfig?.dockerDefaultImage || '').trim() || 'ghcr.io/qingchencloud/openclaw'
+}
+
+function formatDockerBytes(bytes) {
+  const value = Number(bytes || 0)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${value} B`
+}
+
+function parseOptionalPort(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const num = Number(raw)
+  if (!Number.isInteger(num) || num < 1 || num > 65535) throw new Error(t('services.invalidPort', { value: raw }))
+  return num
+}
+
+async function hasDockerManagerBackend() {
+  try {
+    const resp = await fetch('/__api/health', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    const ct = (resp.headers.get('content-type') || '').toLowerCase()
+    return resp.ok && !ct.includes('text/html') && !ct.includes('text/plain')
+  } catch (e) {
+    console.warn('[services] hasDockerManagerBackend check failed:', e)
+    return false
+  }
+}
+
+async function loadDockerManager(page) {
+  const bar = page.querySelector('#docker-manager-bar')
+  if (!bar) return
+  const stopSlowHint = startSlowHint(bar, 'Docker 管理加载较慢，仍在继续检测后端与节点状态…', 8000)
+  try {
+    const backendReady = await hasDockerManagerBackend()
+    if (!backendReady) {
+      stopSlowHint()
+      bar.innerHTML = `<div class="stat-card"><div class="stat-card-meta">${t('services.dockerManagerUnavailable')}</div></div>`
+      return
+    }
+    const [overview, panelConfig] = await Promise.all([
+      api.dockerClusterOverview(),
+      api.readPanelConfig().catch(() => ({})),
+    ])
+    stopSlowHint()
+    const totalNodes = overview.length
+    const onlineNodes = overview.filter(node => node.online).length
+    const totalContainers = overview.reduce((sum, node) => sum + (node.containers?.length || 0), 0)
+    const runningContainers = overview.reduce((sum, node) => sum + (node.containers?.filter?.(ct => ct.state === 'running').length || 0), 0)
+    bar.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--space-sm);flex-wrap:wrap;margin-bottom:var(--space-md)">
+        <div class="stat-card" style="padding:12px 16px;min-width:260px">
+          <div class="stat-card-label">${t('services.dockerManager')}</div>
+          <div class="stat-card-meta">${onlineNodes}/${totalNodes} ${t('services.dockerOnline')} · ${runningContainers}/${totalContainers} ${t('services.dockerContainersLabel')}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" data-action="docker-refresh">${t('services.dockerRefresh')}</button>
+          <button class="btn btn-secondary btn-sm" data-action="docker-add-node">${t('services.dockerAddNode')}</button>
+          <button class="btn btn-secondary btn-sm" data-action="docker-pull-image">${t('services.dockerPullAction')}</button>
+          <button class="btn btn-primary btn-sm" data-action="docker-create-container">${t('services.dockerCreateContainer')}</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:var(--space-md)">
+        ${overview.map(node => {
+          const containers = node.containers || []
+          const nodeMeta = node.online
+            ? `${escapeHtml(node.endpoint || '')} · Docker ${escapeHtml(node.dockerVersion || t('common.unknown'))} · ${formatDockerBytes(node.memory)} · CPU ${node.cpus || 0}`
+            : `${escapeHtml(node.endpoint || '')} · ${escapeHtml(node.error || t('services.dockerOffline'))}`
+          return `
+            <div class="service-card" data-docker-node="${escapeHtml(node.id)}" style="display:block">
+              <div style="display:flex;justify-content:space-between;gap:var(--space-sm);align-items:flex-start;flex-wrap:wrap">
+                <div class="service-info">
+                  <span class="status-dot ${node.online ? 'running' : 'stopped'}"></span>
+                  <div>
+                    <div class="service-name">${escapeHtml(node.name)}${node.id === 'local' ? ` <span class="clawhub-badge" style="margin-left:6px;background:rgba(99,102,241,0.14);color:#6366f1">${t('services.dockerLocalNode')}</span>` : ''}</div>
+                    <div class="service-desc">${nodeMeta}</div>
+                    <div class="service-desc">${node.online ? `${t('services.dockerContainersLabel')}: ${node.runningContainers || 0}/${node.totalContainers || containers.length}` : t('services.dockerOffline')}</div>
+                  </div>
+                </div>
+                <div class="service-actions">
+                  ${node.id !== 'local' ? `<button class="btn btn-danger btn-sm" data-action="docker-remove-node" data-node-id="${escapeHtml(node.id)}" data-name="${escapeHtml(node.name)}">${t('common.delete')}</button>` : ''}
+                </div>
+              </div>
+              <div style="margin-top:var(--space-sm);display:flex;flex-direction:column;gap:8px">
+                ${containers.length ? containers.map(ct => `
+                  <div class="service-card" style="background:var(--bg-secondary);border:1px solid var(--border-primary)">
+                    <div class="service-info">
+                      <span class="status-dot ${ct.state === 'running' ? 'running' : 'stopped'}"></span>
+                      <div>
+                        <div class="service-name">${escapeHtml(ct.name)}</div>
+                        <div class="service-desc">${escapeHtml(ct.image)} · ${escapeHtml(ct.status || ct.state || t('common.unknown'))}${ct.ports ? ` · ${escapeHtml(ct.ports)}` : ''}</div>
+                      </div>
+                    </div>
+                    <div class="service-actions">
+                      ${ct.state === 'running'
+                        ? `<button class="btn btn-secondary btn-sm" data-action="docker-restart-container" data-node-id="${escapeHtml(node.id)}" data-container-id="${escapeHtml(ct.id)}" data-name="${escapeHtml(ct.name)}">${t('services.restart')}</button>
+                           <button class="btn btn-secondary btn-sm" data-action="docker-stop-container" data-node-id="${escapeHtml(node.id)}" data-container-id="${escapeHtml(ct.id)}" data-name="${escapeHtml(ct.name)}">${t('services.stop')}</button>`
+                        : `<button class="btn btn-primary btn-sm" data-action="docker-start-container" data-node-id="${escapeHtml(node.id)}" data-container-id="${escapeHtml(ct.id)}" data-name="${escapeHtml(ct.name)}">${t('services.start')}</button>`}
+                      <button class="btn btn-danger btn-sm" data-action="docker-remove-container" data-node-id="${escapeHtml(node.id)}" data-container-id="${escapeHtml(ct.id)}" data-name="${escapeHtml(ct.name)}" data-running="${ct.state === 'running' ? '1' : ''}">${t('common.delete')}</button>
+                    </div>
+                  </div>
+                `).join('') : `<div class="form-hint" style="padding:4px 0">${t('services.dockerNoContainers')}</div>`}
+              </div>
+            </div>
+          `
+        }).join('')}
+      </div>
+      <div class="form-hint" style="margin-top:var(--space-sm)">${t('services.dockerDefaultImageHint')} <code>${escapeHtml(configuredDockerImage(panelConfig))}</code></div>
+    `
+  } catch (e) {
+    stopSlowHint()
+    bar.innerHTML = `<div class="stat-card"><div class="stat-card-meta" style="color:var(--error)">${t('services.dockerManagerLoadFailed')}: ${escapeHtml(e?.message || e)}</div></div>`
+  }
+}
+
+// ===== 服务列表 =====
+
+function renderServiceLoadFallback(container, error) {
+  const gatewayUi = getGatewayUiSnapshot({ running: true })
+  const errText = escapeHtml(error?.message || String(error || ''))
+  container.innerHTML = `
+    <div class="service-card" data-label="ai.openclaw.gateway">
+      <div class="service-info">
+        <span class="status-dot ${gatewayUi.tone === 'stopped' ? 'warning' : gatewayUi.tone}"></span>
+        <div>
+          <div class="service-name">ai.openclaw.gateway</div>
+          <div class="service-desc">${gatewayUi.details}</div>
+          <div class="service-desc" style="color:var(--warning);margin-top:4px">${t('services.serviceLoadFailed')}: ${errText}</div>
+        </div>
+      </div>
+      <div class="service-actions">
+        <button class="btn btn-secondary btn-sm" data-action="refresh-services">${t('services.refreshStatus')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="restart" data-label="ai.openclaw.gateway">${t('services.restart')}</button>
+      </div>
+    </div>`
+}
+
+async function loadServices(page) {
+  const container = page.querySelector('#services-list')
+  if (!container) return
+  const stopSlowHint = startSlowHint(container, '服务状态加载较慢，仍在继续检测 Gateway 与服务进程状态…', 8000)
+  try {
+    await refreshGatewayStatus().catch(() => {})
+    await ensureServicesWebSocket().catch(() => {})
+    const services = await invoke('get_services_status', {}, 8000)
+    stopSlowHint()
+    renderServices(container, services)
+    const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+    if (gw) {
+      maybeShowForeignGatewayBindingPrompt({
+        service: gw,
+        onRefresh: () => loadServices(page),
+      }).catch(() => {})
+    }
+  } catch (e) {
+    stopSlowHint()
+    await refreshGatewayStatus().catch(() => {})
+    renderServiceLoadFallback(container, e)
+  }
+}
+
+async function openDockerAddNode(page) {
+  showModal({
+    title: t('services.dockerAddNode'),
+    fields: [
+      { name: 'name', label: t('services.dockerNodeName'), value: '', placeholder: 'docker-node-1' },
+      { name: 'endpoint', label: t('services.dockerNodeEndpoint'), value: '', placeholder: 'tcp://192.168.1.20:2375' },
+    ],
+    onConfirm: async ({ name, endpoint }) => {
+      try {
+        await api.dockerAddNode((name || '').trim(), (endpoint || '').trim())
+        toast(t('services.dockerNodeAdded'), 'success')
+        await loadDockerManager(page)
+      } catch (e) {
+        toast(e?.message || e, 'error')
+      }
+    },
+  })
+}
+
+async function openDockerPullImage(page) {
+  const [nodes, panelConfig] = await Promise.all([
+    api.dockerListNodes(),
+    api.readPanelConfig().catch(() => ({})),
+  ])
+  showModal({
+    title: t('services.dockerPullTitle'),
+    fields: [
+      { name: 'nodeId', type: 'select', label: t('services.dockerNodeName'), value: nodes[0]?.id || 'local', options: nodes.map(node => ({ value: node.id, label: node.name })) },
+      { name: 'image', label: t('services.dockerImageLabel'), value: configuredDockerImage(panelConfig), hint: t('services.dockerDefaultImageHint') },
+      { name: 'tag', label: t('services.dockerTagLabel'), value: 'latest' },
+    ],
+    onConfirm: async ({ nodeId, image, tag }) => {
+      const requestId = `pull-${Date.now()}`
+      const modal = showUpgradeModal(t('services.dockerPullTitle'))
+      let lastMessage = ''
+      const timer = setInterval(async () => {
+        try {
+          const status = await api.dockerPullStatus(requestId)
+          if (Number.isFinite(status?.percent)) modal.setProgress(status.percent)
+          if (status?.message && status.message !== lastMessage) {
+            lastMessage = status.message
+            modal.appendLog(status.message)
+          }
+        } catch (e) { console.warn('[services] docker pull status poll failed:', e) }
+      }, 800)
+
+      try {
+        const result = await api.dockerPullImage({
+          nodeId: nodeId || null,
+          image: (image || '').trim() || configuredDockerImage(panelConfig),
+          tag: (tag || '').trim() || 'latest',
+          requestId,
+        })
+        clearInterval(timer)
+        modal.setProgress(100)
+        if (result?.message) modal.appendLog(result.message)
+        modal.setDone(t('services.dockerPullDone'))
+        toast(t('services.dockerPullDone'), 'success')
+        await loadDockerManager(page)
+      } catch (e) {
+        clearInterval(timer)
+        modal.appendLog(e?.message || String(e))
+        modal.setError(e?.message || String(e))
+        toast(e?.message || e, 'error')
+      }
+    },
+  })
+}
+
+async function openDockerCreateContainer(page) {
+  const [nodes, panelConfig] = await Promise.all([
+    api.dockerListNodes(),
+    api.readPanelConfig().catch(() => ({})),
+  ])
+  showModal({
+    title: t('services.dockerCreateTitle'),
+    fields: [
+      { name: 'nodeId', type: 'select', label: t('services.dockerNodeName'), value: nodes[0]?.id || 'local', options: nodes.map(node => ({ value: node.id, label: node.name })) },
+      { name: 'name', label: t('services.dockerContainerNameLabel'), value: '', placeholder: 'openclaw-worker-1' },
+      { name: 'image', label: t('services.dockerImageLabel'), value: configuredDockerImage(panelConfig), hint: t('services.dockerDefaultImageHint') },
+      { name: 'tag', label: t('services.dockerTagLabel'), value: 'latest' },
+      { name: 'panelPort', label: t('services.dockerPanelPortLabel'), value: '1420', hint: t('services.dockerPortOptionalHint') },
+      { name: 'gatewayPort', label: t('services.dockerGatewayPortLabel'), value: '18789', hint: t('services.dockerPortOptionalHint') },
+      { name: 'volume', type: 'checkbox', label: t('services.dockerUseVolume'), value: true },
+    ],
+    onConfirm: async ({ nodeId, name, image, tag, panelPort, gatewayPort, volume }) => {
+      try {
+        await api.dockerCreateContainer({
+          nodeId: nodeId || null,
+          name: (name || '').trim() || undefined,
+          image: (image || '').trim() || configuredDockerImage(panelConfig),
+          tag: (tag || '').trim() || 'latest',
+          panelPort: parseOptionalPort(panelPort),
+          gatewayPort: parseOptionalPort(gatewayPort),
+          volume: !!volume,
+        })
+        toast(t('services.dockerContainerCreated'), 'success')
+        await loadDockerManager(page)
+      } catch (e) {
+        toast(e?.message || e, 'error')
+      }
+    },
+  })
+}
+
+async function handleDockerRemoveNode(btn, page) {
+  const name = btn.dataset.name || btn.dataset.nodeId || ''
+  const yes = await showConfirm(t('services.dockerRemoveNodeConfirm', { name }))
+  if (!yes) return
+  await api.dockerRemoveNode(btn.dataset.nodeId)
+  toast(t('services.dockerNodeRemoved'), 'success')
+  await loadDockerManager(page)
+}
+
+async function handleDockerContainerAction(action, btn, page) {
+  const nodeId = btn.dataset.nodeId || null
+  const containerId = btn.dataset.containerId
+  const name = btn.dataset.name || containerId
+  if (!containerId) throw new Error(t('services.missingContainerId'))
+  if (action === 'docker-remove-container') {
+    const yes = await showConfirm(t('services.dockerRemoveContainerConfirm', { name }))
+    if (!yes) return
+    await api.dockerRemoveContainer(nodeId, containerId, btn.dataset.running === '1')
+    toast(t('services.dockerContainerRemoved'), 'success')
+    await loadDockerManager(page)
+    return
+  }
+
+  const label = {
+    'docker-start-container': t('services.start'),
+    'docker-stop-container': t('services.stop'),
+    'docker-restart-container': t('services.restart'),
+  }[action]
+  const fn = {
+    'docker-start-container': api.dockerStartContainer,
+    'docker-stop-container': api.dockerStopContainer,
+    'docker-restart-container': api.dockerRestartContainer,
+  }[action]
+  await fn(nodeId, containerId)
+  toast(t('services.actionDone', { label: name, action: label }), 'success')
+  await loadDockerManager(page)
+}
+
+async function openGatewayConflict(page, error = null) {
+  const services = await api.getServicesStatus().catch(() => [])
+  const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+  await showGatewayConflictGuidance({
+    error,
+    service: gw,
+    onRefresh: async () => {
+      await loadVersion(page)
+      await loadServices(page)
+    },
+  })
+}
+
+function renderServices(container, services) {
+  const gw = services.find(s => s.label === 'ai.openclaw.gateway')
+
+  let html = ''
+  if (gw) {
+    const gatewayUi = getGatewayUiSnapshot(gw)
+    // 检测 CLI 是否安装
+    const cliMissing = gw.cli_installed === false
+    const foreignGateway = !cliMissing && isForeignGatewayService(gw)
+    const foreignPidText = gw.pid ? ` (PID: ${gw.pid})` : ''
+
+    html += `
+    <div class="service-card" data-label="${gw.label}">
+      <div class="service-info">
+        <span class="status-dot ${cliMissing ? 'stopped' : foreignGateway ? 'warning' : gatewayUi.tone}"></span>
+        <div>
+          <div class="service-name">${gw.label}</div>
+          <div class="service-desc">${cliMissing
+            ? t('services.cliNotInstalled')
+            : foreignGateway
+              ? t('services.foreignGatewayDesc', { pid: foreignPidText, settings: t('sidebar.settings') })
+              : `${gatewayUi.details}${gw.pid ? ' · PID: ' + gw.pid : ''}`
+          }</div>
+        </div>
+      </div>
+      <div class="service-actions">
+        ${cliMissing
+          ? `<div style="display:flex;flex-direction:column;gap:var(--space-xs);align-items:flex-end">
+               <div style="color:var(--text-tertiary);font-size:var(--font-size-xs)">${t('services.installCliHint')}</div>
+               <code style="font-size:var(--font-size-xs);background:var(--bg-tertiary);padding:2px 8px;border-radius:4px;user-select:all">npm install -g @qingchencloud/openclaw-zh</code>
+               <button class="btn btn-secondary btn-sm" data-action="refresh-services" style="margin-top:4px">${t('services.refreshStatus')}</button>
+             </div>`
+          : foreignGateway
+            ? `<div style="display:flex;flex-direction:column;gap:var(--space-xs);align-items:flex-end">
+                 <div style="color:var(--warning);font-size:var(--font-size-xs);max-width:320px;text-align:right">${t('services.foreignGatewayHint')}</div>
+                 <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                   <button class="btn btn-primary btn-sm" data-action="claim-gateway">${t('services.claimGateway')}</button>
+                   <button class="btn btn-secondary btn-sm" data-action="resolve-foreign-gateway">${t('dashboard.viewGuidance')}</button>
+                   <button class="btn btn-secondary btn-sm" data-action="refresh-services">${t('services.refreshStatus')}</button>
+                 </div>
+               </div>`
+          : gw.running
+            ? `<button class="btn btn-secondary btn-sm" data-action="restart" data-label="${gw.label}">${t('services.restart')}</button>
+               <button class="btn btn-danger btn-sm" data-action="stop" data-label="${gw.label}">${t('services.stop')}</button>
+               ${isMacPlatform() ? `<button class="btn btn-danger btn-sm" data-action="uninstall-gateway">${t('services.uninstall')}</button>` : ''}`
+            : `<button class="btn btn-primary btn-sm" data-action="start" data-label="${gw.label}">${t('services.start')}</button>
+               ${isMacPlatform() ? `<button class="btn btn-primary btn-sm" data-action="install-gateway">${t('services.install')}</button><button class="btn btn-danger btn-sm" data-action="uninstall-gateway">${t('services.uninstall')}</button>` : ''}`
+        }
+      </div>
+    </div>`
+  } else {
+    html += `
+    <div class="service-card">
+      <div class="service-info">
+        <span class="status-dot stopped"></span>
+        <div>
+          <div class="service-name">ai.openclaw.gateway</div>
+          <div class="service-desc">${t('services.gwNotInstalled')}</div>
+        </div>
+      </div>
+      <div class="service-actions">
+        <button class="btn btn-primary btn-sm" data-action="install-gateway">${t('services.install')}</button>
+      </div>
+    </div>`
+  }
+
+  container.innerHTML = html
+}
+
+// ===== 备份管理 =====
+
+async function loadBackups(page) {
+  const list = page.querySelector('#backup-list')
+  if (!list) return
+  const stopSlowHint = startSlowHint(list, '备份列表加载较慢，仍在继续读取本地备份信息…', 8000)
+  try {
+    const backups = await api.listBackups()
+    stopSlowHint()
+    renderBackups(list, backups)
+  } catch (e) {
+    stopSlowHint()
+    list.innerHTML = `<div style="color:var(--error)">${t('services.backupLoadFailed')}: ${escapeHtml(e?.message || e)}</div>`
+  }
+}
+
+function renderBackups(container, backups) {
+  if (!backups || !backups.length) {
+    container.innerHTML = `<div style="color:var(--text-tertiary);padding:var(--space-md) 0">${t('services.noBackup')}</div>`
+    return
+  }
+  container.innerHTML = backups.map(b => {
+    const date = b.created_at ? new Date(b.created_at * 1000).toLocaleString() : t('common.unknown')
+    const size = b.size ? (b.size / 1024).toFixed(1) + ' KB' : ''
+    return `
+      <div class="service-card" data-backup="${b.name}">
+        <div class="service-info">
+          <div>
+            <div class="service-name">${b.name}</div>
+            <div class="service-desc">${date}${size ? ' · ' + size : ''}</div>
+          </div>
+        </div>
+        <div class="service-actions">
+          <button class="btn btn-primary btn-sm" data-action="restore-backup" data-name="${b.name}">${t('services.restore')}</button>
+          <button class="btn btn-danger btn-sm" data-action="delete-backup" data-name="${b.name}">${t('common.delete')}</button>
+        </div>
+      </div>`
+  }).join('')
+}
+
+// ===== 事件绑定（事件委托） =====
+
+function bindEvents(page) {
+  page.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]')
+    if (!btn) return
+    const action = btn.dataset.action
+    btn.disabled = true
+
+    try {
+      switch (action) {
+        case 'start':
+        case 'stop':
+        case 'restart':
+          await handleServiceAction(action, btn.dataset.label, page)
+          break
+        case 'save-config':
+          await handleSaveConfig(page, true)
+          break
+        case 'save-config-only':
+          await handleSaveConfig(page, false)
+          break
+        case 'reload-config':
+          await loadConfigEditor(page)
+          break
+        case 'calibrate-config-inherit':
+          await handleCalibrateConfig(page, 'inherit')
+          break
+        case 'calibrate-config-reset':
+          await handleCalibrateConfig(page, 'reset')
+          break
+        case 'create-backup':
+          await handleCreateBackup(page)
+          break
+        case 'restore-backup':
+          await handleRestoreBackup(btn.dataset.name, page)
+          break
+        case 'delete-backup':
+          await handleDeleteBackup(btn.dataset.name, page)
+          break
+        case 'upgrade':
+          await handleUpgrade(btn, page)
+          break
+        case 'switch-source':
+          await handleSwitchSource(btn.dataset.source, page)
+          break
+        case 'install-gateway':
+          await handleInstallGateway(btn, page)
+          break
+        case 'uninstall-gateway':
+          await handleUninstallGateway(btn, page)
+          break
+        case 'refresh-services':
+          await loadServices(page)
+          break
+        case 'claim-gateway':
+          await handleClaimGateway(btn, page)
+          break
+        case 'resolve-foreign-gateway':
+          await openGatewayConflict(page)
+          break
+        case 'docker-refresh':
+          await loadDockerManager(page)
+          break
+        case 'docker-add-node':
+          await openDockerAddNode(page)
+          break
+        case 'docker-pull-image':
+          await openDockerPullImage(page)
+          break
+        case 'docker-create-container':
+          await openDockerCreateContainer(page)
+          break
+        case 'docker-remove-node':
+          await handleDockerRemoveNode(btn, page)
+          break
+        case 'docker-start-container':
+        case 'docker-stop-container':
+        case 'docker-restart-container':
+        case 'docker-remove-container':
+          await handleDockerContainerAction(action, btn, page)
+          break
+      }
+    } catch (e) {
+      toast(e.toString(), 'error')
+    } finally {
+      btn.disabled = false
+    }
+  })
+}
+
+// ===== 服务操作 =====
+
+const ACTION_LABELS = { start: t('services.start'), stop: t('services.stop'), restart: t('services.restart') }
+const POLL_INTERVAL = 1500  // 轮询间隔 ms
+const POLL_TIMEOUT = 300000  // 最长等待 300s，配合 Rust 侧端口监听等待
+
+function isGatewayActionSettled(action, service) {
+  const gatewayState = getGatewayHealthState()
+  const wsInfo = typeof wsClient?.getConnectionInfo === 'function' ? wsClient.getConnectionInfo() : {}
+
+  if (action === 'stop') {
+    return service?.running === false && !wsInfo.connected && !wsInfo.gatewayReady
+  }
+
+  if (service?.running !== true) return false
+  if (gatewayState?.foreign) return false
+
+  if (action === 'restart' || action === 'start') {
+    if (gatewayState?.health === 'running' && wsInfo.gatewayReady) return true
+    if (gatewayState?.health === 'degraded' && wsInfo.connected && ['idle', 'scheduled', 'attempting'].includes(wsInfo.reconnectState || 'idle')) {
+      return true
+    }
+  }
+
+  return false
+}
+
+async function showGatewayStartFailureDiagnosis(error, label = 'ai.openclaw.gateway') {
+  try {
+    const diagnosis = await buildGatewayStartFailureDiagnosis({ label, startError: error })
+    const html = renderGatewayStartFailureDiagnosisHtml(diagnosis, escapeHtml, t)
+    const overlay = showContentModal({
+      title: t('services.gatewayStartDiagnosisTitle'),
+      content: html,
+      width: 720,
+      buttons: [
+        { label: t('services.runDoctorFix'), id: 'gw-diag-doctor', className: 'btn btn-primary btn-sm' },
+        { label: t('services.retryStart'), id: 'gw-diag-retry', className: 'btn btn-secondary btn-sm' },
+      ],
+    })
+    overlay.querySelector('#gw-diag-doctor')?.addEventListener('click', async () => {
+      try {
+        toast(t('services.fixing'), 'info')
+        await api.doctorFix()
+        await refreshGatewayStatus().catch(() => {})
+        toast(t('services.fixDoneRestarting'), 'success')
+        await api.startService(label)
+        await refreshGatewayStatus().catch(() => {})
+        overlay.close?.()
+      } catch (e) {
+        toast(t('services.fixDoneRestartFail') + ': ' + (e?.message || e), 'error')
+      }
+    })
+    overlay.querySelector('#gw-diag-retry')?.addEventListener('click', async () => {
+      try {
+        toast(t('services.startSent'), 'info')
+        await api.startService(label)
+        await refreshGatewayStatus().catch(() => {})
+        overlay.close?.()
+      } catch (e) {
+        overlay.close?.()
+        await showGatewayStartFailureDiagnosis(e, label)
+      }
+    })
+  } catch (diagErr) {
+    toast(t('services.gatewayStartDiagnosisFailed') + ': ' + (diagErr?.message || diagErr), 'error')
+  }
+}
+
+async function handleServiceAction(action, label, page) {
+  const fn = { start: api.startService, stop: api.stopService, restart: api.restartService }[action]
+  const actionLabel = ACTION_LABELS[action]
+  const expectRunning = action !== 'stop'
+
+  // 通知守护模块：用户主动操作
+  if (action === 'stop') setUserStopped(true)
+  if (action === 'start') resetAutoRestart()
+
+  // 找到触发按钮所在的 service-card，替换按钮区域为加载状态
+  const card = page.querySelector(`.service-card[data-label="${label}"]`)
+  const actionsEl = card?.querySelector('.service-actions')
+  const origHtml = actionsEl?.innerHTML || ''
+
+  let cancelled = false
+  if (actionsEl) {
+    actionsEl.innerHTML = `
+      <div class="service-loading">
+        <div class="service-spinner"></div>
+        <span class="service-loading-text">${t('services.actionProgress', { action: actionLabel })}</span>
+        <button class="btn btn-sm btn-ghost service-cancel-btn" style="display:none">${t('services.cancelWait')}</button>
+      </div>`
+    const cancelBtn = actionsEl.querySelector('.service-cancel-btn')
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => { cancelled = true })
+    }
+  }
+
+  // 更新状态点为加载中
+  const dot = card?.querySelector('.status-dot')
+  if (dot) { dot.className = 'status-dot loading' }
+
+  try {
+    await fn(label)
+  } catch (e) {
+    if (isForeignGatewayError(e)) {
+      await openGatewayConflict(page, e)
+    } else {
+      toast(t('services.actionCmdFailed', { action: actionLabel, error: e.message || e }), 'error')
+      if (action === 'start' || action === 'restart') {
+        await showGatewayStartFailureDiagnosis(e, label)
+      }
+    }
+    if (actionsEl) actionsEl.innerHTML = origHtml
+    if (dot) dot.className = 'status-dot stopped'
+    return
+  }
+
+  // 轮询等待实际状态变化
+  const startTime = Date.now()
+  let showedCancel = false
+  const loadingText = actionsEl?.querySelector('.service-loading-text')
+  const cancelBtn = actionsEl?.querySelector('.service-cancel-btn')
+
+  while (!cancelled && page.isConnected) {
+    const elapsed = Date.now() - startTime
+
+    // 5 秒后显示取消按钮
+    if (!showedCancel && elapsed > 5000 && cancelBtn) {
+      cancelBtn.style.display = ''
+      showedCancel = true
+    }
+
+    // 更新等待时间
+    if (loadingText) {
+      const sec = Math.floor(elapsed / 1000)
+      loadingText.textContent = t('services.actionProgressSec', { action: actionLabel, sec })
+    }
+
+    // 超时
+    if (elapsed > POLL_TIMEOUT) {
+      toast(t('services.actionTimeout', { action: actionLabel }), 'warning')
+      if (action === 'start' || action === 'restart') {
+        await showGatewayStartFailureDiagnosis(new Error(t('services.actionTimeout', { action: actionLabel })), label)
+      }
+      break
+    }
+
+    // 检查实际状态
+    try {
+      const services = await api.getServicesStatus()
+      await refreshGatewayStatus().catch(() => {})
+      const svc = services?.find?.(s => s.label === label) || services?.[0]
+      if (svc && isGatewayActionSettled(action, svc)) {
+        const gatewayUi = getGatewayUiSnapshot(svc)
+        const pid = svc.pid ? ` · PID: ${svc.pid}` : ''
+        toast(t('services.actionDoneWithStatus', { label, action: actionLabel, status: gatewayUi.statusText, pid }), 'success')
+        if (!page.isConnected) return
+        await loadServices(page)
+        return
+      }
+    } catch (e) { console.warn('[services] service status poll failed:', e) }
+
+    if (!page.isConnected) return
+    await new Promise(r => setTimeout(r, POLL_INTERVAL))
+  }
+
+  if (!page.isConnected) return
+  if (cancelled) {
+    toast(t('services.cancelled'), 'info')
+  }
+  await loadServices(page)
+}
+
+// ===== 备份操作 =====
+
+async function handleCreateBackup(page) {
+  const result = await api.createBackup()
+  toast(t('services.backupCreated', { name: result.name }), 'success')
+  await loadBackups(page)
+}
+
+async function handleRestoreBackup(name, page) {
+  const yes = await showConfirm(t('services.restoreConfirm', { name }))
+  if (!yes) return
+  await api.restoreBackup(name)
+  toast(t('services.restored'), 'success')
+  await loadBackups(page)
+}
+
+async function handleDeleteBackup(name, page) {
+  const yes = await showConfirm(t('services.deleteConfirm', { name }))
+  if (!yes) return
+  await api.deleteBackup(name)
+  toast(t('services.backupDeleted'), 'success')
+  await loadBackups(page)
+}
+
+function calibrationSourceLabel(source) {
+  if (source === 'backup') return t('services.calibrationSourceBackup')
+  if (source === 'current') return t('services.calibrationSourceCurrent')
+  return t('services.calibrationSourceEmpty')
+}
+
+async function handleCalibrateConfig(page, mode) {
+  const yes = await showConfirm(mode === 'reset'
+    ? t('services.calibrateResetConfirm')
+    : t('services.calibrateInheritConfirm'))
+  if (!yes) return
+
+  const status = page.querySelector('#config-calibration-status')
+  if (status) status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.calibrating')}</span>`
+
+  const result = await api.calibrateOpenclawConfig(mode)
+  const summary = t('services.calibrationSummary', {
+    mode: mode === 'reset' ? t('services.calibrateReset') : t('services.calibrateInherit'),
+    source: calibrationSourceLabel(result?.source),
+    count: String(result?.inheritedKeys?.length || 0),
+  })
+  const warnings = Array.isArray(result?.warnings) ? result.warnings.filter(Boolean) : []
+
+  if (status) status.innerHTML = `<span style="color:var(--success)">${escapeHtml(summary)}</span>${warnings.length ? `<br><span style="color:var(--warning)">${escapeHtml(warnings.join('；'))}</span>` : ''}`
+  toast(t('services.calibrationDone') + ' · ' + summary, 'success')
+  if (warnings.length) toast(warnings.join('；'), 'warning')
+
+  await Promise.all([
+    loadConfigEditor(page),
+    loadBackups(page),
+    loadServices(page),
+  ])
+}
+
+// ===== 配置文件编辑器 =====
+
+let _configOriginal = ''
+
+async function loadConfigEditor(page) {
+  const section = page.querySelector('#config-editor-section')
+  const area = page.querySelector('#config-editor-area')
+  const status = page.querySelector('#config-editor-status')
+  const btnSave = page.querySelector('[data-action="save-config"]')
+  const btnSaveOnly = page.querySelector('[data-action="save-config-only"]')
+  if (!section || !area || !status || !btnSave || !btnSaveOnly) return
+
+  const stopSlowHint = startSlowHint(status, '配置编辑器加载较慢，仍在继续读取 openclaw.json …', 8000)
+  try {
+    const config = await api.readOpenclawConfig()
+    const json = JSON.stringify(config, null, 2)
++    stopSlowHint()
+     _configOriginal = json
+    _configOriginal = json
+    area.value = json
+    area.disabled = false
+    btnSave.disabled = false
+    btnSaveOnly.disabled = false
+    section.style.display = ''
+    status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.configLoaded')} · ${(json.length / 1024).toFixed(1)} KB</span>`
+
+    // 实时检测 JSON 语法
+    area.oninput = () => {
+      try {
+        JSON.parse(area.value)
+        const changed = area.value !== _configOriginal
+        status.innerHTML = changed
+          ? `<span style="color:var(--warning)">● ${t('services.configUnsaved')}</span>`
+          : `<span style="color:var(--text-tertiary)">${t('services.configNoChange')}</span>`
+        btnSave.disabled = !changed
+        btnSaveOnly.disabled = !changed
+      } catch (e) {
+        status.innerHTML = `<span style="color:var(--error)">${t('services.configJsonError')}: ${e.message.split(' at ')[0]}</span>`
+        btnSave.disabled = true
+        btnSaveOnly.disabled = true
+      }
+    }
+  } catch (e) {
+    stopSlowHint()
+    // openclaw.json 不存在，隐藏编辑器
+    console.warn('[services] loadConfigEditor failed:', e)
+    section.style.display = 'none'
+  }
+}
+
+async function handleSaveConfig(page, restart) {
+  const area = page.querySelector('#config-editor-area')
+  const status = page.querySelector('#config-editor-status')
+
+  let config
+  try {
+    config = JSON.parse(area.value)
+  } catch (e) {
+    toast(t('services.configSaveJsonError'), 'error')
+    return
+  }
+
+  status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.autoBackingUp')}</span>`
+
+  try {
+    // 保存前自动备份
+    await api.createBackup()
+  } catch (e) {
+    const yes = await showConfirm(t('services.autoBackupFailed') + ': ' + e + '\n\n' + t('services.continueWithoutBackup'))
+    if (!yes) return
+  }
+
+  status.innerHTML = `<span style="color:var(--text-tertiary)">${t('services.saving')}</span>`
+
+  try {
+    await api.writeOpenclawConfig(config, { reload: false })
+    _configOriginal = area.value
+    toast(restart ? t('services.configSavedRestarting') : t('services.configSaved'), 'success')
+    status.innerHTML = `<span style="color:var(--success)">${t('services.configSaved')}</span>`
+
+    page.querySelector('[data-action="save-config"]').disabled = true
+    page.querySelector('[data-action="save-config-only"]').disabled = true
+
+    if (restart) {
+      try {
+        await api.restartGateway()
+        toast(t('services.gwRestarted'), 'success')
+      } catch (e) {
+        toast(t('services.configSavedGwFailed') + ': ' + e, 'warning')
+      }
+      await loadServices(page)
+    }
+
+    await loadBackups(page)
+  } catch (e) {
+    toast(t('common.saveFailed') + ': ' + e, 'error')
+    status.innerHTML = `<span style="color:var(--error)">${t('common.saveFailed')}: ${e}</span>`
+  }
+}
+
+// ===== 升级操作 =====
+
+async function doUpgradeWithModal(source, page, version = null, method = 'auto') {
+  const modal = showUpgradeModal(t('services.upgradeTitle'))
+  let unlistenLog, unlistenProgress, unlistenDone, unlistenError
+  setUpgrading(true)
+
+  // 清理所有监听
+  const cleanup = () => {
+    setUpgrading(false)
+    unlistenLog?.()
+    unlistenProgress?.()
+    unlistenDone?.()
+    unlistenError?.()
+  }
+
+  try {
+    if (window.__TAURI_INTERNALS__) {
+      const { listen } = await import('@tauri-apps/api/event')
+      unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+      unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
+
+      // 后台任务完成事件
+      unlistenDone = await listen('upgrade-done', (e) => {
+        cleanup()
+        modal.setDone(typeof e.payload === 'string' ? e.payload : t('services.taskDone'))
+        loadVersion(page)
+      })
+
+      // 后台任务失败事件
+      unlistenError = await listen('upgrade-error', (e) => {
+        cleanup()
+        const errStr = String(e.payload || t('common.error'))
+        modal.appendLog(errStr)
+        const fullLog = modal.getLogText() + '\n' + errStr
+        const diagnosis = diagnoseInstallError(fullLog)
+        modal.setError(diagnosis.title)
+        if (diagnosis.hint) modal.appendLog('')
+        if (diagnosis.hint) modal.appendHtmlLog(`${statusIcon('info', 14)} ${escapeHtml(diagnosis.hint)}`)
+        if (diagnosis.command) modal.appendHtmlLog(`${icon('clipboard', 14)} ${escapeHtml(diagnosis.command)}`)
+        if (window.__openAIDrawerWithError) {
+          window.__openAIDrawerWithError({ title: diagnosis.title, error: fullLog, scene: t('services.upgradeScene'), hint: diagnosis.hint })
+        }
+      })
+
+      // 发起后台任务（立即返回）
+      await api.upgradeOpenclaw(source, version, method)
+      modal.appendLog(t('services.taskStarted'))
+    } else {
+      // Web 模式：仍然同步等待（dev-api 后端没有 spawn）
+      modal.appendLog(t('services.webModeNoLog'))
+      const msg = await api.upgradeOpenclaw(source, version, method)
+      modal.setDone(typeof msg === 'string' ? msg : (msg?.message || t('services.upgradeDone')))
+      await loadVersion(page)
+      cleanup()
+    }
+  } catch (e) {
+    cleanup()
+    const errStr = String(e)
+    modal.appendLog(errStr)
+    const fullLog = modal.getLogText() + '\n' + errStr
+    const diagnosis = diagnoseInstallError(fullLog)
+    modal.setError(diagnosis.title)
+  }
+}
+
+async function handleUpgrade(btn, page) {
+  const sourceLabel = detectedSource === 'official' ? t('services.officialEdition') : t('services.chineseEdition')
+  const recommendedVersion = recommended ? t('services.recommendedVersionSuffix', { version: recommended }) : ''
+  const yes = await showConfirm(t('services.upgradeConfirm', { source: sourceLabel, version: recommendedVersion }))
+  if (!yes) return
+  await doUpgradeWithModal(detectedSource, page, recommended || null)
+}
+
+async function handleSwitchSource(target, page) {
+  const targetLabel = target === 'official' ? t('services.officialEdition') : t('services.chineseEdition')
+  const recommended = target === 'official'
+    ? (lastVersionInfo?.source === 'official' ? lastVersionInfo?.recommended : null)
+    : (lastVersionInfo?.source === 'chinese' ? lastVersionInfo?.recommended : null)
+  const recommendedVersion = recommended ? t('services.recommendedVersionSuffix', { version: recommended }) : ''
+  const yes = await showConfirm(t('services.switchSourceConfirm', { target: targetLabel, version: recommendedVersion }))
+  if (!yes) return
+  await doUpgradeWithModal(target, page, null)
+}
+
+// ===== 认领外部 Gateway =====
+
+async function handleClaimGateway(btn, page) {
+  btn.classList.add('btn-loading')
+  btn.textContent = t('common.processing')
+  try {
+    await api.claimGateway()
+    toast(t('services.claimSuccess'), 'success')
+    // 立刻刷新全局 Gateway 状态
+    const { refreshGatewayStatus } = await import('../lib/app-state.js')
+    await refreshGatewayStatus()
+    await loadServices(page)
+  } catch (e) {
+    toast(t('services.claimFailed') + ': ' + e, 'error')
+    btn.classList.remove('btn-loading')
+    btn.textContent = t('services.claimGateway')
+  }
+}
+
+// ===== Gateway 安装/卸载 =====
+
+async function handleInstallGateway(btn, page) {
+  btn.classList.add('btn-loading')
+  btn.textContent = t('services.installing')
+  try {
+    await api.installGateway()
+    toast(t('services.gwInstalled'), 'success')
+    await loadServices(page)
+  } catch (e) {
+    toast(t('services.installFailed') + ': ' + e, 'error')
+    btn.classList.remove('btn-loading')
+    btn.textContent = t('services.install')
+  }
+}
+
+async function handleUninstallGateway(btn, page) {
+  const yes = await showConfirm(t('services.uninstallConfirm'))
+  if (!yes) return
+  btn.classList.add('btn-loading')
+  btn.textContent = t('services.uninstalling')
+  try {
+    await api.uninstallGateway()
+    toast(t('services.gwUninstalled'), 'success')
+    await loadServices(page)
+  } catch (e) {
+    toast(t('services.uninstallFailed') + ': ' + e, 'error')
+    btn.classList.remove('btn-loading')
+    btn.textContent = t('services.uninstall')
+  }
+}

@@ -9,6 +9,15 @@ fn main() {
 
 fn sync_runtime_dir(manifest_dir: &str) {
     if is_android_target() {
+        let placeholder_dir = std::path::Path::new(&manifest_dir)
+            .join("resources")
+            .join("runtime")
+            .join("android");
+        std::fs::create_dir_all(&placeholder_dir)
+            .expect("failed to create Android runtime placeholder dir");
+        let placeholder = placeholder_dir.join(".runtime-placeholder");
+        write_if_changed(&placeholder, b"android")
+            .expect("failed to write Android runtime placeholder");
         println!("cargo:warning=skip desktop runtime sync for Android target");
         return;
     }

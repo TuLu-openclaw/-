@@ -223,6 +223,10 @@ async fn current_gateway_runtime(label: &str) -> (bool, Option<u32>) {
         .await
         .unwrap_or((false, None))
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        (false, None)
+    }
 }
 
 async fn wait_for_gateway_running(label: &str, timeout: Duration) -> Result<(), String> {
@@ -1364,6 +1368,42 @@ mod platform {
     pub async fn restart_service_impl(_label: &str) -> Result<(), String> {
         stop_service_impl(_label).await?;
         start_service_impl(_label).await
+    }
+}
+
+// ===== 移动端占位实现（Android/iOS 不管理桌面 Gateway 服务） =====
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+mod platform {
+    pub fn current_uid() -> Result<u32, String> {
+        Ok(0)
+    }
+
+    pub fn scan_service_labels() -> Vec<String> {
+        vec!["ai.openclaw.gateway".to_string()]
+    }
+
+    pub fn is_cli_installed() -> bool {
+        false
+    }
+
+    pub fn invalidate_cli_cache() {}
+
+    pub async fn start_service_impl(_label: &str) -> Result<(), String> {
+        Err("当前平台不支持管理桌面 Gateway 服务".to_string())
+    }
+
+    pub async fn stop_service_impl(_label: &str) -> Result<(), String> {
+        Err("当前平台不支持管理桌面 Gateway 服务".to_string())
+    }
+
+    pub async fn restart_service_impl(label: &str) -> Result<(), String> {
+        stop_service_impl(label).await?;
+        start_service_impl(label).await
+    }
+
+    pub async fn check_service_status(_uid: u32, _label: &str) -> (bool, Option<u32>) {
+        (false, None)
     }
 }
 

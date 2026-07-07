@@ -169,6 +169,11 @@ fn check_cftunnel_process() -> Option<(Option<u64>, bool)> {
         }
         None
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
 }
 
 #[tauri::command]

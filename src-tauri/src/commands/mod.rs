@@ -729,4 +729,9 @@ fn build_enhanced_path() -> String {
         }
         parts.join(";")
     }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        current
+    }
 }

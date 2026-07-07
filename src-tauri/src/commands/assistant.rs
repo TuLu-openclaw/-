@@ -2277,7 +2277,6 @@ pub async fn open_xingshu_chat_window(app: tauri::AppHandle) -> Result<String, S
         .inner_size(1280.0, 820.0)
         .min_inner_size(980.0, 640.0)
         .resizable(true)
-        .decorations(true)
         .center()
         .build()
         .map_err(|e| format!("创建星枢聊天室窗口失败: {}", e))?;
@@ -2306,7 +2305,6 @@ async fn open_xingshu_skill_url_window(
         .inner_size(1280.0, 860.0)
         .min_inner_size(980.0, 640.0)
         .resizable(true)
-        .decorations(true)
         .visible(true)
         .focused(true)
         .center()
@@ -2722,7 +2720,6 @@ pub async fn open_live_player(
     .inner_size(1280.0, 720.0)
     .min_inner_size(640.0, 360.0)
     .resizable(true)
-    .decorations(true)
     .always_on_top(false)
     .build()
     .map_err(|e| format!("创建播放器窗口失败: {}", e))?;

@@ -3158,6 +3158,11 @@ fn r2_platform_key() -> &'static str {
 /// npm 全局 node_modules 目录
 #[allow(dead_code)]
 fn npm_global_modules_dir() -> Option<PathBuf> {
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        return None;
+    }
+
     #[cfg(target_os = "windows")]
     {
         super::windows_npm_global_prefix()
@@ -3200,6 +3205,11 @@ fn npm_global_modules_dir() -> Option<PathBuf> {
 /// npm 全局 bin 目录
 #[allow(dead_code)]
 pub(crate) fn npm_global_bin_dir() -> Option<PathBuf> {
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        return None;
+    }
+
     #[cfg(target_os = "windows")]
     {
         super::windows_npm_global_prefix()
@@ -6970,6 +6980,12 @@ pub fn scan_git_paths() -> Result<Value, String> {
 /// 尝试自动安装 Git（Windows: winget; macOS: xcode-select; Linux: apt/yum）
 #[tauri::command]
 pub async fn auto_install_git(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = app;
+        return Err("当前平台不支持自动安装 Git".to_string());
+    }
+
     use std::process::Stdio;
     use tauri::Emitter;
 
@@ -7132,6 +7148,12 @@ pub async fn auto_install_git(app: tauri::AppHandle) -> Result<String, String> {
 /// 尝试自动安装 Node.js（Windows: winget; macOS: brew/pkg; Linux: apt/yum）
 #[tauri::command]
 pub async fn auto_install_node(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = app;
+        return Err("当前平台不支持自动安装 Node.js".to_string());
+    }
+
     use tauri::Emitter;
 
     let _ = app.emit("upgrade-log", "正在尝试自动安装 Node.js...");

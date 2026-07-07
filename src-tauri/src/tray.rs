@@ -1,5 +1,6 @@
 /// 系统托盘模块
 /// Windows / macOS / Linux 通用，Tauri v2 内置跨平台支持
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
@@ -7,6 +8,12 @@ use tauri::{
     AppHandle, Manager,
 };
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn setup_tray(_app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // 菜单项
     let show = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
@@ -50,6 +57,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "show" => {

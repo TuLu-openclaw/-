@@ -417,6 +417,15 @@ fn uv_bin_dir() -> PathBuf {
             .join("clawpanel")
             .join("bin")
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".local")
+            .join("share")
+            .join("clawpanel")
+            .join("bin")
+    }
 }
 
 /// uv 二进制完整路径
@@ -445,6 +454,15 @@ fn uv_download_urls(version: &str) -> Vec<String> {
     let filename = "uv-x86_64-unknown-linux-gnu.tar.gz";
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     let filename = "uv-aarch64-unknown-linux-gnu.tar.gz";
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64")
+    )))]
+    let filename = "uv-x86_64-unknown-linux-gnu.tar.gz";
 
     let primary = format!("https://github.com/astral-sh/uv/releases/download/{version}/{filename}");
     let mirror1 = format!("https://ghproxy.com/https://github.com/astral-sh/uv/releases/download/{version}/{filename}");

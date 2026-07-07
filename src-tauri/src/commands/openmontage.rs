@@ -794,7 +794,6 @@ pub async fn openmontage_open_studio(app: tauri::AppHandle) -> Result<Value, Str
         .inner_size(1440.0, 920.0)
         .min_inner_size(1100.0, 720.0)
         .resizable(true)
-        .decorations(true)
         .visible(true)
         .focused(true)
         .center()

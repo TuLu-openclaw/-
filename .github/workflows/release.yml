@@ -1,14 +1,12 @@
 # XingShuOpenClaw Release Build Workflow
-# Builds all platforms automatically when pushing to main branch
-# Creates GitHub Release when pushing a v* tag
+# Builds desktop clients on main branch pushes.
+# GitHub Release creation is manual only for this standalone movie project.
 name: Release
 
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:

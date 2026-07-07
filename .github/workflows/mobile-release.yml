@@ -1,9 +1,6 @@
 name: Mobile and TV Client Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:
@@ -16,7 +13,7 @@ permissions:
   contents: write
 
 env:
-  TAG_NAME: ${{ github.event.inputs.tag_name || github.ref_name }}
+  TAG_NAME: ${{ github.event.inputs.tag_name || format('manual-{0}', github.run_number) }}
   CARGO_BUILD_JOBS: 2
   RUSTFLAGS: "-C codegen-units=1"
 

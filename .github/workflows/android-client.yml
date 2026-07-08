@@ -1,15 +1,23 @@
-name: Android Mobile and TV Client Build
+name: Android Phone and TV Release
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag, e.g. movie-v1.0.0'
+        required: true
+        default: 'movie-v1.0.0'
+      release_name:
+        description: 'Release title'
+        required: false
+        default: '屠戮影视 1.0.0'
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 env:
   CARGO_BUILD_JOBS: 2
-  RUSTFLAGS: "-C codegen-units=1"
+  RUSTFLAGS: '-C codegen-units=1'
 
 jobs:
   android-mobile-tv:
@@ -18,14 +26,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '24'
           cache: npm
 
       - name: Setup Rust
@@ -37,7 +43,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -45,44 +51,49 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          sdkmanager "ndk;27.0.12077973" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager 'ndk;27.0.12077973' 'platforms;android-35' 'build-tools;35.0.0'
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Install frontend dependencies
-        run: npm ci --prefer-offline
+        run: npm ci
 
-      - name: Resolve client build version
-        shell: bash
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          APP_VERSION="v${VERSION}"
-          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
-          echo "SAFE_APP_VERSION=${APP_VERSION//\//-}" >> "$GITHUB_ENV"
-          echo "Building XingShu Movie Android client ${APP_VERSION} without git tag or GitHub Release."
-
-      - name: Prepare bundled runtime
-        run: node scripts/prepare-runtime.mjs linux-x64
+      - name: Build frontend
+        run: npm run build
 
       - name: Initialize Android project
         run: npx tauri android init --ci
 
-      - name: Apply TV client manifest hints
+      - name: Apply Android TV launcher support
         run: node scripts/patch-android-tv-manifest.mjs
 
       - name: Build Android APK and AAB
         run: npx tauri android build --apk --aab --split-per-abi --ci
 
-      - name: Upload Android APK artifacts
+      - name: Collect Android artifacts
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print -exec cp {} release-assets/ \;
+          find src-tauri/gen/android/app/build/outputs/bundle -type f -name '*.aab' -print -exec cp {} release-assets/ \; || true
+          ls -lah release-assets
+
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: XingShuMovie-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-APK
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: TuluMovie-Android-Phone-TV
+          path: release-assets/*
           if-no-files-found: error
 
-      - name: Upload Android AAB artifacts
-        uses: actions/upload-artifact@v4
+      - name: Publish Android Release assets
+        uses: softprops/action-gh-release@v2
         with:
-          name: XingShuMovie-${{ env.SAFE_APP_VERSION }}-Android-Mobile-TV-AAB
-          path: src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          if-no-files-found: warn
+          tag_name: ${{ inputs.tag_name }}
+          name: ${{ inputs.release_name }}
+          body: |
+            屠戮影视 Android 手机端 / TV 端安装包。
+
+            APK 已加入 Android TV Leanback 启动入口，可用于手机、平板和 Android TV。
+            AAB 用于应用商店上传，不是普通用户直接安装包。
+          files: release-assets/*
+          make_latest: true

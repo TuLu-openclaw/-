@@ -74,7 +74,7 @@ jobs:
         run: node scripts/patch-android-tv-manifest.mjs
 
       - name: Build Android APK and AAB
-        run: npx tauri android build --apk --aab --split-per-abi --ci
+        run: npx tauri android build --apk --aab --split-per-abi --target aarch64 --verbose --ci
 
       - name: Collect Android artifacts
         shell: bash
@@ -103,4 +103,5 @@ jobs:
             AAB 用于应用商店上传，不是普通用户直接安装包。
           files: release-assets/*
           make_latest: true
+
 

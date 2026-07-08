@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "星枢OpenClaw",
-  "version": "4.3.8",
-  "identifier": "ai.openclaw.tulu-openclaw-v2",
+  "productName": "屠戮影视",
+  "version": "1.0.0",
+  "identifier": "com.tulu.movie",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "星枢OpenClaw",
-        "width": 1100,
-        "height": 700,
-        "minWidth": 800,
-        "minHeight": 500,
+        "title": "屠戮影视",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
         "decorations": true,
         "resizable": true
       }
@@ -28,12 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis",
-      "appimage",
-      "deb",
-      "dmg"
-    ],
+    "targets": ["nsis", "appimage", "deb", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,12 +39,7 @@
     "resources": [
       "resources/player.html",
       "player.html",
-      "../src/player.html",
-      "resources/Star-Office-UI-master/**/*",
-      "resources/agency-agents/**/*",
-      "resources/cli-anything/**/*",
-      "resources/codex提示词/**/*",
-      "resources/runtime/**/*"
+      "../src/player.html"
     ],
     "windows": {
       "webviewInstallMode": {
@@ -57,20 +47,13 @@
         "silent": true
       },
       "nsis": {
-        "languages": [
-          "SimpChinese",
-          "TradChinese",
-          "English"
-        ],
+        "languages": ["SimpChinese", "TradChinese", "English"],
         "displayLanguageSelector": true,
         "installerHooks": "./windows/nsis-installer-hooks.nsh"
       }
     },
     "linux": {
-      "deb": {
-        "preInstallScript": "./linux/close-running-app.sh",
-        "preRemoveScript": "./linux/close-running-app.sh"
-      }
+      "deb": {}
     }
   }
 }

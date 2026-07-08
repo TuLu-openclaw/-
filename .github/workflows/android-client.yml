@@ -51,7 +51,13 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          sdkmanager 'ndk;27.0.12077973' 'platforms;android-35' 'build-tools;35.0.0'
+          rm -rf "$ANDROID_SDK_ROOT/ndk/27.0.12077973"
+          yes | sdkmanager --licenses >/dev/null || true
+          for i in 1 2 3; do
+            sdkmanager 'ndk;27.0.12077973' 'platforms;android-35' 'build-tools;35.0.0' && break
+            rm -rf "$ANDROID_SDK_ROOT/ndk/27.0.12077973"
+            sleep 10
+          done
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
@@ -97,3 +103,4 @@ jobs:
             AAB 用于应用商店上传，不是普通用户直接安装包。
           files: release-assets/*
           make_latest: true
+

@@ -275,6 +275,7 @@ fn start_install_shutdown_watcher(app: tauri::AppHandle) {
 #[cfg(not(target_os = "windows"))]
 fn start_install_shutdown_watcher(_app: tauri::AppHandle) {}
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let hot_update_dir = commands::openclaw_dir()
         .join("星枢OpenClaw")

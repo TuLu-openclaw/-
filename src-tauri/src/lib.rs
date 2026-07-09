@@ -550,11 +550,8 @@ pub fn run() {
             assistant::get_window_by_label,
             assistant::update_office_state,
             assistant::sync_openclaw_to_office,
-            #[cfg(target_os = "windows")]
             assistant::vod_fetch,
-            #[cfg(target_os = "windows")]
             assistant::missav_api_fetch,
-            #[cfg(target_os = "windows")]
             assistant::napp03_api_fetch,
             #[cfg(target_os = "windows")] // 数据目录 & 图片存储
             assistant::assistant_ensure_data_dir,

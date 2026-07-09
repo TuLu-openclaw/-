@@ -1,5 +1,7 @@
 # 星枢OpenClaw 客户端平台矩阵
 
+> 正式发布必须同时满足 `docs/ENTERPRISE_RELEASE_GATE.md`。本矩阵只说明“能构建什么产物”，不等于“已达到企业版官方级上线质量”。
+
 ## 已自动构建
 
 | 平台 | 产物 | Workflow | 说明 |

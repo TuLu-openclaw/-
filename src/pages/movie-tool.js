@@ -1642,7 +1642,15 @@ function isBadMovieUrl(key) {
   return true
 }
 
-// 优先直接 fetch，失败走 Tauri Rust 后端，再失败走 CORS 代理
+function hasTauriRuntime() {
+  return !!(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.location?.hostname === 'tauri.localhost')
+}
+
+function allowPublicCorsProxy() {
+  return !hasTauriRuntime() && /^(localhost|127\.0\.0\.1)$/i.test(window.location?.hostname || '')
+}
+
+// 优先 Tauri Rust 后端代理；正式客户端禁止依赖公网 CORS 代理。
 async function vodApiFetch(url, signal) {
   const cacheKey = 'json:' + url
   const cached = getCachedMovieRequest(cacheKey)
@@ -1665,19 +1673,21 @@ async function vodApiFetch(url, signal) {
     } else { console.warn('[vodApiFetch] Tauri API 不可用') }
   } catch (e) { console.warn('[vodApiFetch] Tauri降级异常:', e.message) }
 
-  // ── 方式2: CORS 代理（allorigins → corsproxy.io）───────────────────────
-  const proxies = [
-    'https://api.allorigins.win/raw?url=',
-    'https://corsproxy.io/?',
-  ]
-  for (const proxy of proxies) {
-    try {
-      const resp = await fetch(proxy + encodeURIComponent(url), { signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined })
-      if (resp.ok) {
-        const txt = await resp.text()
-        try { console.info('[vodApiFetch] 代理成功:', proxy.slice(0, 30), url.slice(0, 50)); const json = JSON.parse(txt); setCachedMovieRequest(cacheKey, json); return json } catch(e) { console.warn('[vodApiFetch] 代理JSON解析失败:', proxy, e.message) }
-      }
-    } catch (e) { console.warn('[vodApiFetch] 代理异常:', proxy, e.message) }
+  // ── 开发模式兜底：仅浏览器本地调试允许公网 CORS 代理 ────────────────────
+  if (allowPublicCorsProxy()) {
+    const proxies = [
+      'https://api.allorigins.win/raw?url=',
+      'https://corsproxy.io/?',
+    ]
+    for (const proxy of proxies) {
+      try {
+        const resp = await fetch(proxy + encodeURIComponent(url), { signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined })
+        if (resp.ok) {
+          const txt = await resp.text()
+          try { console.info('[vodApiFetch] 开发代理成功:', proxy.slice(0, 30), url.slice(0, 50)); const json = JSON.parse(txt); setCachedMovieRequest(cacheKey, json); return json } catch(e) { console.warn('[vodApiFetch] 开发代理JSON解析失败:', proxy, e.message) }
+        }
+      } catch (e) { console.warn('[vodApiFetch] 开发代理异常:', proxy, e.message) }
+    }
   }
 
   // ── 方式3: 直接 fetch（最后兜底，5秒超时）─────────────────────────────
@@ -1758,28 +1768,30 @@ async function fetchTextWithFallback(url, options = {}) {
     console.warn('[fetchTextWithFallback] Tauri 请求失败:', tauriError?.message || tauriError, url.slice(0, 80))
   }
 
-  const proxies = [
-    'https://corsproxy.io/?',
-    'https://api.allorigins.win/raw?url=',
-  ]
-  for (const proxy of proxies) {
-    try {
-      const resp = await fetch(proxy + encodeURIComponent(url), {
-        signal: AbortSignal.timeout ? AbortSignal.timeout(proxyTimeoutMs) : undefined,
-      })
-      const text = await resp.text()
-      if (resp.ok) {
-        const result = { text, status: resp.status, via: proxy }
-        setCachedMovieRequest(cacheKey, result)
-        return result
+  if (allowPublicCorsProxy()) {
+    const proxies = [
+      'https://corsproxy.io/?',
+      'https://api.allorigins.win/raw?url=',
+    ]
+    for (const proxy of proxies) {
+      try {
+        const resp = await fetch(proxy + encodeURIComponent(url), {
+          signal: AbortSignal.timeout ? AbortSignal.timeout(proxyTimeoutMs) : undefined,
+        })
+        const text = await resp.text()
+        if (resp.ok) {
+          const result = { text, status: resp.status, via: proxy }
+          setCachedMovieRequest(cacheKey, result)
+          return result
+        }
+      } catch (proxyError) {
+        console.warn('[fetchTextWithFallback] 开发代理请求失败:', proxy, proxyError?.message || proxyError)
       }
-    } catch (proxyError) {
-      console.warn('[fetchTextWithFallback] 代理请求失败:', proxy, proxyError?.message || proxyError)
     }
   }
 
   markBadMovieUrl(cacheKey)
-  throw new Error('Failed to fetch')
+  throw new Error(hasTauriRuntime() ? 'Tauri 后端请求失败，正式客户端已禁用公网 CORS 代理' : 'Failed to fetch')
 }
 
 // 普通请求（非 JSON）
@@ -2193,19 +2205,61 @@ function normalizeMyAvLiveModel(model) {
   }
 }
 
+async function fetchMyAvLiveModelsFromHtml(category, search = '') {
+  const categoryId = String(category?.id || 'girls').replace(/^\/+/, '')
+  const path = '/' + (categoryId || 'girls')
+  const pageUrl = myAvLiveUrl(path)
+  const text = await fetchMyAvLiveText(pageUrl, { timeoutSecs: 25 })
+  const cardRe = /<a\b[^>]+href=["']([^"']*(?:\/chat\/|\/models\/|\/girls\/)[^"']+)["'][^>]*>[\s\S]*?<\/a>/gi
+  const imgRe = /<img\b[^>]*(?:data-src|src)=["']([^"']+)["'][^>]*>/i
+  const altRe = /<img\b[^>]*alt=["']([^"']+)["'][^>]*>/i
+  const seen = new Set()
+  const rows = []
+  let match
+  while ((match = cardRe.exec(text)) && rows.length < 96) {
+    const block = match[0]
+    const href = normalizeHttpUrl(new URL(match[1], MYAVLIVE_BASE).href)
+    const title = decodeHtmlEntities((altRe.exec(block)?.[1] || block.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim())
+    const username = (href.match(/\/([^/?#]+)\/?(?:[?#].*)?$/)?.[1] || title).replace(/^chat\//, '')
+    const key = username.toLowerCase()
+    if (!username || seen.has(key)) continue
+    seen.add(key)
+    rows.push(normalizeMyAvLiveModel({
+      id: username,
+      username: title || username,
+      name: title || username,
+      status: 'public',
+      streamName: username,
+      avatarUrl: imgRe.exec(block)?.[1] || '',
+      previewUrlThumbBig: imgRe.exec(block)?.[1] || '',
+      primaryTag: category?.primaryTag || 'girls',
+    }))
+  }
+  const q = String(search || '').trim().toLowerCase()
+  return q ? rows.filter(item => (item.username + ' ' + item.title).toLowerCase().includes(q)) : rows
+}
+
 async function fetchMyAvLiveModels(category, search = '') {
   const q = String(search || '').trim()
   const primaryTag = category?.primaryTag || 'girls'
   const pageSize = 96
   const maxPages = 5
   const pages = []
-  for (let page = 0; page < maxPages; page++) {
-    const baseQuery = { primaryTag, limit: pageSize, offset: page * pageSize }
-    if (q) baseQuery.search = q
-    const data = await fetchMyAvLiveApi('/api/front/models', baseQuery, { timeoutSecs: 25 })
-    const rows = Array.isArray(data?.models) ? data.models : []
-    pages.push(...rows)
-    if (rows.length < pageSize) break
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const baseQuery = { primaryTag, limit: pageSize, offset: page * pageSize }
+      if (q) baseQuery.search = q
+      const data = await fetchMyAvLiveApi('/api/front/models', baseQuery, { timeoutSecs: 25 })
+      const rows = Array.isArray(data?.models) ? data.models : []
+      pages.push(...rows)
+      if (rows.length < pageSize) break
+    }
+  } catch (apiError) {
+    const fallbackRows = await fetchMyAvLiveModelsFromHtml(category, search).catch(htmlError => {
+      throw new Error('API 失败: ' + (apiError?.message || apiError) + '；HTML 兜底失败: ' + (htmlError?.message || htmlError))
+    })
+    if (fallbackRows.length) return fallbackRows
+    throw new Error('API 失败: ' + (apiError?.message || apiError) + '；HTML 兜底未解析到直播间')
   }
   const seen = new Set()
   let models = pages

@@ -1,20 +1,13 @@
-#[cfg(target_os = "windows")]
 use aes::Aes256;
 use base64::{engine::general_purpose, Engine as _};
-#[cfg(target_os = "windows")]
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
-#[cfg(target_os = "windows")]
 use hmac::{Hmac, Mac};
 use serde::Serialize;
-#[cfg(target_os = "windows")]
 use sha1::Sha1;
 #[cfg(target_os = "windows")]
 use tauri::Emitter;
-#[cfg(target_os = "windows")]
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
-#[cfg(target_os = "windows")]
 type HmacSha1 = Hmac<Sha1>;
-#[cfg(target_os = "windows")]
 use std::net::SocketAddr;
 /// AI 助手工具命令
 /// 提供终端执行、文件读写、目录列表等能力
@@ -664,7 +657,6 @@ pub async fn assistant_web_search(
     Ok(output)
 }
 
-#[cfg(target_os = "windows")]
 fn missav_resolve_overrides(host: &str) -> Option<&'static [&'static str]> {
     match host.to_ascii_lowercase().as_str() {
         "missav.live" => Some(&["104.26.6.107:443", "104.26.7.107:443", "172.67.72.106:443"]),
@@ -672,14 +664,12 @@ fn missav_resolve_overrides(host: &str) -> Option<&'static [&'static str]> {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn missav_host(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
     missav_resolve_overrides(&host).map(|_| host)
 }
 
-#[cfg(target_os = "windows")]
 async fn vod_fetch_missav_with_curl(
     url: &str,
     timeout: std::time::Duration,
@@ -765,7 +755,6 @@ async fn vod_fetch_missav_with_curl(
     }
 }
 
-#[cfg(target_os = "windows")]
 fn build_vod_http_client(
     timeout: std::time::Duration,
     user_agent: &str,
@@ -809,7 +798,6 @@ fn build_vod_http_client(
 
 /// 影视接口请求：使用 Rust HTTP 客户端，自动解压并按 UTF-8/GBK 解码。
 /// 旧实现依赖 PowerShell iwr，会在影视工具频繁搜索/播放时反复拉起 powershell.exe。
-#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn vod_fetch(url: String, timeout_secs: Option<u64>) -> Result<String, String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -821,10 +809,17 @@ pub async fn vod_fetch(url: String, timeout_secs: Option<u64>) -> Result<String,
     let client = build_vod_http_client(timeout, user_agent, &url)?;
 
     let send_request = |client: &reqwest::Client| {
-        client
+        let mut request = client
             .get(&url)
-            .header("Accept", "application/json, text/html, text/plain, */*")
-            .send()
+            .header("Accept", "application/json, text/html, text/plain, */*");
+        if url.contains("myavlive.com") || url.contains("doppiocdn.com") {
+            request = request
+                .header("Front-Version", "11.8.27")
+                .header("Origin", "https://zh.myavlive.com")
+                .header("Referer", "https://zh.myavlive.com/")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+        }
+        request.send()
     };
 
     let resp_result = send_request(&client).await;
@@ -876,7 +871,6 @@ pub async fn vod_fetch(url: String, timeout_secs: Option<u64>) -> Result<String,
     Ok(utf8)
 }
 
-#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn napp03_api_fetch(
     path: String,
@@ -966,12 +960,10 @@ pub async fn napp03_api_fetch(
     String::from_utf8(plain).map_err(|e| format!("napp03 UTF-8 解码失败: {e}"))
 }
 
-#[cfg(target_os = "windows")]
 fn missav_json_escape(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-#[cfg(target_os = "windows")]
 fn decode_missav_html_entities(value: &str) -> String {
     value
         .replace("&amp;", "&")
@@ -982,7 +974,6 @@ fn decode_missav_html_entities(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
-#[cfg(target_os = "windows")]
 fn missav_html_text(value: &str) -> String {
     let without_tags = regex::Regex::new(r"(?is)<[^>]+>")
         .ok()
@@ -995,7 +986,6 @@ fn missav_html_text(value: &str) -> String {
         .join(" ")
 }
 
-#[cfg(target_os = "windows")]
 fn is_missav_allowed_nav_path(path: &str) -> bool {
     let p = path.trim_end_matches('/');
     if p.is_empty() || p == "/" {
@@ -1027,7 +1017,6 @@ fn is_missav_allowed_nav_path(path: &str) -> bool {
         || p.starts_with("/actresses/")
 }
 
-#[cfg(target_os = "windows")]
 fn missav_nav_name_from_path(path: &str) -> String {
     let tail = path
         .trim_end_matches('/')
@@ -1042,7 +1031,6 @@ fn missav_nav_name_from_path(path: &str) -> String {
         .replace('-', " ")
 }
 
-#[cfg(target_os = "windows")]
 fn parse_missav_cards_json(html: &str, base_url: &str) -> Result<serde_json::Value, String> {
     let anchor_re = regex::Regex::new(r#"(?is)<a\b([^>]*)>(.*?)</a>"#)
         .map_err(|e| format!("MISSAV 链接正则错误: {e}"))?;
@@ -1396,7 +1384,6 @@ fn parse_missav_cards_json(html: &str, base_url: &str) -> Result<serde_json::Val
     )
 }
 
-#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn missav_api_fetch(
     path: String,
@@ -1482,7 +1469,6 @@ pub async fn missav_api_fetch(
     ))
 }
 
-#[cfg(target_os = "windows")]
 fn query_to_pairs(query: Option<&serde_json::Value>) -> Result<Vec<(String, String)>, String> {
     let mut pairs = Vec::new();
     if let Some(value) = query {
@@ -1507,7 +1493,6 @@ fn query_to_pairs(query: Option<&serde_json::Value>) -> Result<Vec<(String, Stri
     Ok(pairs)
 }
 
-#[cfg(target_os = "windows")]
 fn hmac_sha1_hex(key: &str, data: &str) -> Result<String, String> {
     let mut mac =
         HmacSha1::new_from_slice(key.as_bytes()).map_err(|e| format!("HMAC key 错误: {e}"))?;

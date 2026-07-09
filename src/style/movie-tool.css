@@ -2390,3 +2390,246 @@
   }
 }
 
+
+/* ===== Mobile launch hardening: phone-first movie client ===== */
+@media (max-width: 720px) {
+  .tvbox-root,
+  .tvbox-app {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .tvbox-header-inner,
+  .tvbox-navbar,
+  .tvbox-content {
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  .tvbox-content {
+    padding: 12px max(10px, env(safe-area-inset-left)) calc(18px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-right)) !important;
+    overflow-x: hidden;
+  }
+
+  .tvbox-mode-tabs {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: max(104px, calc((100vw - 44px) / 3));
+    gap: 8px !important;
+    overflow-x: auto;
+    padding: 2px 0 8px;
+    scroll-snap-type: x proximity;
+  }
+
+  .tvbox-mode-tab {
+    min-width: 0 !important;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px !important;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
+
+  .tvbox-library-workspace,
+  .tvbox-library-sources,
+  .tvbox-library-toolbar,
+  .tvbox-library-tabs {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100%;
+  }
+
+  .tvbox-library-sidebar,
+  .tvbox-library-source-grid,
+  .tvbox-library-card-grid,
+  .tvbox-grid,
+  .tvbox-live-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .tvbox-library-source-grid,
+  .tvbox-library-tabs,
+  .tvbox-catbar,
+  .tvbox-srcbar {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(116px, max-content);
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 8px;
+    padding-bottom: 8px;
+    scrollbar-width: none;
+  }
+
+  .tvbox-library-source-grid::-webkit-scrollbar,
+  .tvbox-library-tabs::-webkit-scrollbar,
+  .tvbox-catbar::-webkit-scrollbar,
+  .tvbox-srcbar::-webkit-scrollbar { display: none; }
+
+  .tvbox-missav-app,
+  .tvbox-myavlive-app {
+    margin: 0 !important;
+    padding: 12px 0 22px !important;
+    min-height: auto !important;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    background: var(--xsm-enterprise-bg, #f5f7fb) !important;
+  }
+
+  .tvbox-missav-topbar {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+    padding: 18px 16px !important;
+    border-radius: 22px !important;
+  }
+
+  .tvbox-missav-title {
+    display: grid !important;
+    min-width: 0 !important;
+    gap: 6px !important;
+  }
+
+  .tvbox-missav-title strong,
+  .tvbox-myavlive-app .tvbox-missav-list-head h2 {
+    font-size: clamp(28px, 9vw, 38px) !important;
+    line-height: 1.05 !important;
+  }
+
+  .tvbox-missav-search {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .tvbox-missav-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .tvbox-missav-layout,
+  .tvbox-myavlive-layout {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+    min-height: auto !important;
+  }
+
+  .tvbox-missav-nav,
+  .tvbox-myavlive-app .tvbox-missav-nav {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(118px, max-content);
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    border-radius: 18px !important;
+    border: 1px solid var(--xsm-enterprise-border, rgba(15,23,42,.1)) !important;
+    padding: 10px !important;
+    box-sizing: border-box;
+    scrollbar-width: none;
+  }
+
+  .tvbox-missav-nav::-webkit-scrollbar { display: none; }
+  .tvbox-missav-nav section { display: contents; }
+  .tvbox-missav-nav h3 { display: none !important; }
+  .tvbox-missav-nav-item {
+    min-height: 42px;
+    margin: 0 !important;
+    justify-content: center;
+    text-align: center !important;
+    white-space: nowrap;
+  }
+
+  .tvbox-missav-list-head {
+    align-items: flex-start !important;
+    padding: 14px !important;
+    border-radius: 18px !important;
+  }
+
+  .tvbox-missav-grid,
+  .tvbox-myavlive-app .tvbox-missav-list,
+  .tvbox-myavlive-app .tvbox-missav-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+    min-height: 220px !important;
+  }
+
+  .tvbox-myavlive-live-card {
+    width: 100% !important;
+  }
+
+  .tvbox-myavlive-live-cover {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: 4 / 3 !important;
+  }
+
+  .tvbox-myavlive-live-caption strong { max-width: 100% !important; }
+
+  .tvbox-player-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+
+  .tvbox-player-box {
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-width: 100vw !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tvbox-player-hdr {
+    padding: max(10px, env(safe-area-inset-top)) 12px 10px !important;
+    gap: 10px;
+  }
+
+  .tvbox-player-hdr h3 {
+    font-size: 18px !important;
+    line-height: 1.25;
+  }
+
+  .tvbox-player-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px !important;
+  }
+
+  .tvbox-video-wrap,
+  .tvbox-player-video-wrap {
+    width: 100% !important;
+    aspect-ratio: 16 / 9;
+    max-height: 42dvh;
+  }
+
+  .tvbox-player-controls,
+  .tvbox-player-actions,
+  .tvbox-player-foot {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .tvbox-player-controls button,
+  .tvbox-player-actions button,
+  .tvbox-player-foot button,
+  .tvbox-open-ext {
+    min-height: 40px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 420px) {
+  .tvbox-missav-grid,
+  .tvbox-myavlive-app .tvbox-missav-list,
+  .tvbox-myavlive-app .tvbox-missav-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

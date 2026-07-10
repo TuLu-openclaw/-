@@ -3784,9 +3784,9 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     }
 
     const renderVodCard = (item, source) => {
-      const itemSourceName = item._librarySourceName || source.name
-      const itemSourceKey = item._librarySourceKey || source.key
-      const itemApi = item._libraryApi || ''
+      const itemSourceName = item._librarySourceName || item._sourceName || source.name
+      const itemSourceKey = item._librarySourceKey || item._srcKey || source.key
+      const itemApi = item._libraryApi || item._api || source.api || ''
       const title = escHtml(item.vod_name || item.name || mt('unnamed'))
       const detailId = escHtml((itemSourceKey === 'ip51122' && item._detailUrl) ? item._detailUrl : (item.vod_id || item._detailUrl || ''))
       const poster = renderPosterImg(item.vod_pic || '', item.vod_name || '', itemSourceKey, itemApi || (source.key === 'yinghua' ? YINGHUA_BASE : source.key === 'a_napp03' ? NAPP03_BASE : IP51122_DETAIL_BASE), '影')
@@ -4226,9 +4226,10 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         }
         const allItems = Array.isArray(result?.list) ? result.list : []
         const pageSize = getLibraryPageSize()
-        const start = (libraryPage - 1) * pageSize
-        const items = allItems.slice(start, start + pageSize)
-        const displayResult = { ...result, list: items, page: libraryPage, hasMore: allItems.length > start + pageSize || Boolean(result?.hasMore) }
+        const isServerPaged = !libraryQuery && source.key === 'cms_lzzy'
+        const start = isServerPaged ? 0 : (libraryPage - 1) * pageSize
+        const items = isServerPaged ? allItems.slice(0, pageSize) : allItems.slice(start, start + pageSize)
+        const displayResult = { ...result, list: items, page: libraryPage, hasMore: isServerPaged ? Boolean(result?.hasMore) : (allItems.length > start + pageSize || Boolean(result?.hasMore)) }
         if (!items.length && result?.message) {
           const fallback = source.key !== 'cms_lzzy' ? await loadCmsLibraryCategory(1, 1).catch(() => null) : null
           if (fallback?.list?.length) {
@@ -4401,7 +4402,8 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     })) : [{ name: source || '当前线路', urls: normalizedEps.map((e, i) => ({ epName: e.epName || e.name || ('第 ' + (i + 1) + ' 集'), url: e.url || normalizedUrls[i] || playableUrl })) }]
     playingEp = { id, name, source, epName, pic, epUrl: playableUrl, allUrls: normalizedUrls, allEps: normalizedEps, allLines: normalizedLines, lineIndex: activeLineIndex || 0 }
     const resume = 0
-    const opened = resolvedForStandalone ? await openStandalonePlayer({
+    const forceEmbedded = isMobileClientRuntime()
+    const opened = (!forceEmbedded && resolvedForStandalone) ? await openStandalonePlayer({
       url: playableUrl, title: name, resume,
       allEps: normalizedEps,
       allUrls: normalizedUrls,
@@ -4410,6 +4412,14 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
       pic,
     }) : false
     if (!opened) showEmbeddedPlayerFallback(name, playableUrl, resume, normalizedUrls, normalizedEps, normalizedLines, activeLineIndex || 0)
+  }
+
+  function isMobileClientRuntime() {
+    try {
+      return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || window.matchMedia?.('(max-width: 760px), (pointer: coarse)')?.matches
+    } catch {
+      return false
+    }
   }
 
   async function openStandalonePlayer({ url, title, resume, allEps, allUrls, allLines, playbackCtx, pic }) {
@@ -4442,7 +4452,8 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     }
     if (title) title.textContent = name || mt('playbackTitleFallback')
     overlay.style.display = 'flex'
-    body.innerHTML = '<div class="tvbox-player-boot"><div class="tvbox-player-boot-icon"></div><p>' + escHtml(mt('standaloneFallbackNotice')) + '</p></div>'
+    overlay.classList.toggle('mobile-player-v3', isMobileClientRuntime())
+    body.innerHTML = '<div class="tvbox-player-boot"><div class="tvbox-player-boot-icon"></div><p>' + escHtml(isMobileClientRuntime() ? '正在进入手机全屏播放器...' : mt('standaloneFallbackNotice')) + '</p></div>'
     loadVideoPlayer(url, isDirectVideoUrl(url), resume || 0, fallbackUrls || [url], allEps || [], allLines || [], activeLineIndex || 0)
   }
 

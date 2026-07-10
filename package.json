@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "vite build",
     "preview": "vite preview",
+    "chat-server": "node server/xingshu-chat-server.js",
     "enterprise:smoke": "node scripts/enterprise-smoke.mjs",
+    "test": "node scripts/enterprise-smoke.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

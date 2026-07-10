@@ -185,12 +185,33 @@ function initRemoteKeys() {
 async function tvReq(url, params, method) {
   method = method || 'GET';
   const fullUrl = new URL(url);
-  if (method === 'GET') Object.keys(params||{}).forEach(function(k){ fullUrl.searchParams.set(k,params[k]); });
+  let body;
+  if (method === 'GET') {
+    Object.keys(params||{}).forEach(function(k){ fullUrl.searchParams.set(k,params[k]); });
+  } else {
+    body = new URLSearchParams(params||{}).toString();
+  }
+  const headers = { 'User-Agent': UA, 'Referer': new URL(url).origin + '/', 'Accept': 'application/json,text/plain,*/*' };
+  try {
+    const { invoke } = await import('@tauri-apps/api/core').catch(function(){ return {}; });
+    if (invoke) {
+      const result = await invoke('tvbox_req', {
+        url: fullUrl.toString(),
+        method: method,
+        headers,
+        body,
+        timeout: 15,
+      });
+      return { ok: result.code >= 200 && result.code < 300, status: result.code, text: result.content };
+    }
+  } catch (e) {
+    console.warn('[tvbox] Tauri request failed, falling back to fetch:', e && e.message ? e.message : e);
+  }
   try {
     const resp = await fetch(fullUrl.toString(), {
       method: method,
-      headers: { 'User-Agent': UA, 'Referer': new URL(url).origin + '/' },
-      body: method === 'POST' ? new URLSearchParams(params||{}).toString() : undefined,
+      headers,
+      body: method === 'POST' ? body : undefined,
     });
     return { ok: resp.ok, status: resp.status, text: await resp.text() };
   } catch (e) { return { ok: false, status: -1, text: e.message }; }

@@ -2633,3 +2633,108 @@
     grid-template-columns: 1fr !important;
   }
 }
+
+/* ── 星枢播放器 v2：移动端沉浸式播放体验 ── */
+@media (max-width: 720px), (pointer: coarse) {
+  .tvbox-player-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    background: #05070b !important;
+  }
+
+  .tvbox-player-box {
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    max-height: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: linear-gradient(180deg, #070b12 0%, #0b1020 100%) !important;
+    box-shadow: none !important;
+  }
+
+  .tvbox-player-hdr {
+    min-height: 58px !important;
+    padding: max(12px, env(safe-area-inset-top)) 14px 12px !important;
+    border-bottom: 1px solid rgba(255,255,255,.08) !important;
+    background: linear-gradient(180deg, rgba(15,23,42,.96), rgba(15,23,42,.78)) !important;
+    color: #fff !important;
+  }
+
+  .tvbox-player-title {
+    color: #fff !important;
+    font-size: 16px !important;
+    font-weight: 800 !important;
+    letter-spacing: .2px !important;
+  }
+
+  .tvbox-player-mini {
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255,255,255,.14) !important;
+    background: rgba(255,255,255,.10) !important;
+    color: #fff !important;
+    font-size: 18px !important;
+  }
+
+  .tvbox-player-body {
+    flex: 1 !important;
+    min-height: 0 !important;
+    padding: 12px !important;
+    background: #05070b !important;
+  }
+
+  .tvbox-video-wrap,
+  .tvbox-iframe-wrap {
+    width: 100% !important;
+    aspect-ratio: 16 / 9 !important;
+    border-radius: 18px !important;
+    border: 1px solid rgba(255,255,255,.10) !important;
+    background: #000 !important;
+    box-shadow: 0 18px 52px rgba(0,0,0,.55) !important;
+  }
+
+  .tvbox-video-wrap video,
+  .tvbox-iframe-wrap iframe,
+  .tvbox-player-body video,
+  .tvbox-player-body iframe {
+    border-radius: 18px !important;
+    background: #000 !important;
+  }
+
+  .tvbox-player-foot {
+    padding: 10px 14px max(14px, env(safe-area-inset-bottom)) !important;
+    border-top: 1px solid rgba(255,255,255,.08) !important;
+    background: rgba(15,23,42,.96) !important;
+    justify-content: stretch !important;
+  }
+
+  .tvbox-open-ext {
+    width: 100% !important;
+    min-height: 46px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 14px !important;
+    background: linear-gradient(135deg, #0a59f7, #4d8dff) !important;
+    color: #fff !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+    text-decoration: none !important;
+  }
+
+  .tvbox-player-boot,
+  .tvbox-playback-error,
+  .tvbox-player-loading {
+    min-height: 44vh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 12px !important;
+    color: rgba(255,255,255,.72) !important;
+    text-align: center !important;
+  }
+}

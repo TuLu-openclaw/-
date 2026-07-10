@@ -1022,9 +1022,9 @@ async function openYinghuaDetail(item) {
 }
 
 const VOD_SOURCES = [
-  { key: 'lzzy',   name: '量子资源', api: 'https://cj.lziapi.com/api.php/provide/vod',       type: 'tvbox' },
+  { key: 'lzzy',   name: '量子资源', api: 'https://cj.lziapi.com/api.php/provide/vod',       type: 'tvbox', default: true },
   { key: 'bfzy',   name: '暴风资源', api: 'https://bfzyapi.com/api.php/provide/vod',       type: 'tvbox' },
-  { key: 'xsd',    name: '星之尘',  api: 'https://xsd.sdzyapi.com/api.php/provide/vod',   type: 'tvbox', default: true },
+  { key: 'xsd',    name: '星之尘',  api: 'https://xsd.sdzyapi.com/api.php/provide/vod',   type: 'tvbox' },
   { key: 'tyys',   name: '天涯资源', api: 'https://tyyszy.com/api.php/provide/vod',      type: 'tvbox' },
 ]
 
@@ -1086,9 +1086,13 @@ function setActiveTvboxKey(k) { try { localStorage.setItem(KEY_ACTIVE_TVBOX, k) 
 async function loadWexConfig(api) {
   if (_tvboxCache[api.key]) return _tvboxCache[api.key]
   try {
-    const resp = await fetch(api.url, { signal: AbortSignal.timeout(15000) })
-    if (!resp.ok) throw new Error('HTTP ' + resp.status)
-    const text = await resp.text()
+    const { text } = await fetchTextWithFallback(api.url, {
+      timeoutMs: 15000,
+      directTimeoutMs: 12000,
+      preferTauri: true,
+      credentials: 'omit',
+      headers: { Accept: 'application/json,text/plain,*/*' },
+    })
     let config
     try { config = JSON.parse(text) }
     catch { config = null }
@@ -1105,54 +1109,19 @@ async function loadTvboxConfig(api) {
   if (api.type === 'wex') return loadWexConfig(api)
   if (_tvboxCache[api.key]) return _tvboxCache[api.key]
 
-  // ── 优先：直接 fetch（Tauri WebView 无 CORS 限制）──────────
   try {
-    const resp = await fetch(api.url, {
-      signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
-      credentials: 'include'
+    const { text, via } = await fetchTextWithFallback(api.url, {
+      timeoutMs: 12000,
+      directTimeoutMs: 10000,
+      preferTauri: true,
+      credentials: 'omit',
+      headers: { Accept: 'application/json,text/xml,text/plain,*/*' },
     })
-    if (resp.ok) {
-      const text = await resp.text()
-      let config
-      try { config = JSON.parse(text) }
-      catch { config = parseXml(text) }
-      if (isValidMovieConfig(config)) {
-        _tvboxCache[api.key] = config
-        return config
-      }
-    }
-  } catch { /* 降级到 Tauri 后端 */ }
-
-  // ── 降级：Tauri 后端代理（绕过 CORS）────────────────
-  try {
-    const { invoke } = await import('@tauri-apps/api/core').catch(() => ({}))
-    if (invoke) {
-      const text = await Promise.race([
-        invoke('vod_fetch', { url: api.url }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('vod_fetch timeout')), 8000))
-      ])
-      if (text && typeof text === 'string') {
-        let config
-        try { config = JSON.parse(text) }
-        catch { config = parseXml(text) }
-        if (isValidMovieConfig(config)) {
-          _tvboxCache[api.key] = config
-          return config
-        }
-      }
-    }
-  } catch { /* 降级到直接 fetch */ }
-
-  // ── 最终降级：直接 fetch（网络问题兜底）─────────────
-  try {
-    const resp = await fetch(api.url, { signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined })
-    if (!resp.ok) throw new Error('HTTP ' + resp.status)
-    const text = await resp.text()
     let config
     try { config = JSON.parse(text) }
     catch { config = parseXml(text) }
     if (!isValidMovieConfig(config)) {
-      console.warn('[movie-tool] TVBox config invalid or empty:', api.name, config)
+      console.warn('[movie-tool] TVBox config invalid or empty:', api.name, via, config)
       return null
     }
     _tvboxCache[api.key] = config
@@ -3012,8 +2981,38 @@ function setDebug(msg, detail) {
     if (_sourceHealth[source.api] > 5000) renderSrcBar()
     setDebug(mt('debugResultCount', { count: json.total || count }), 'list.len=' + count)
     let normalized = (json.list || []).map(item => normalizeVodItem(item, source))
+    if (!normalized.length) {
+      const fallback = await loadFirstAvailableVodSource(source.key, typeId)
+      if (fallback?.items?.length) {
+        src = fallback.index
+        _currentTypeId = fallback.typeId
+        renderSrcBar()
+        await renderCatBar(true)
+        setDebug('已自动切换到可用片源', fallback.source.name + ' list.len=' + fallback.items.length)
+        renderVodGrid(await enrichVodListPosters(fallback.source.api, fallback.items), fallback.total || fallback.items.length)
+        return
+      }
+    }
     normalized = await enrichVodListPosters(source.api, normalized)
     renderVodGrid(normalized, json.total || count)
+  }
+
+  async function loadFirstAvailableVodSource(currentSourceKey, currentTypeId) {
+    const candidates = VOD_SOURCES
+      .map((source, index) => ({ source, index }))
+      .filter(item => item.source.key !== currentSourceKey && !['yinghua', 'a_napp03', 'ip51122'].includes(item.source.key))
+    for (const { source, index } of candidates) {
+      const typeMap = VOD_TYPE_MAP[source.key] || { movie: 1, tv: 2, variety: 3, anime: 4, short: 6 }
+      const typeId = typeMap[cat] ?? currentTypeId ?? 1
+      try {
+        const fallbackJson = await fetchJSONFast(source.api + '?ac=list&t=' + typeId + '&pg=1')
+        const items = (fallbackJson.list || []).map(item => normalizeVodItem(item, source))
+        if (items.length) return { source, index, typeId, items, total: fallbackJson.total || items.length }
+      } catch (e) {
+        console.warn('[movie] fallback source failed:', source.name, e?.message || e)
+      }
+    }
+    return null
   }
 
   // 全源并发搜索（所有 VOD CMS 源同时搜，哪个源先返回就先渲染）
@@ -3518,9 +3517,56 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
   }
 }
 
+  async function loadCmsLibraryCategory(typeId, pageNo = 1) {
+    const primary = VOD_SOURCES.find(source => source.key === 'lzzy') || VOD_SOURCES[0]
+    let json = await fetchJSONFast(primary.api + '?ac=list&t=' + encodeURIComponent(typeId || 1) + '&pg=' + encodeURIComponent(pageNo || 1)).catch(() => ({ list: [] }))
+    let source = primary
+    let items = (json.list || []).map(item => normalizeVodItem(item, source))
+    if (!items.length) {
+      const fallback = await loadFirstAvailableVodSource(primary.key, typeId || 1)
+      if (fallback?.items?.length) {
+        source = fallback.source
+        items = fallback.items
+        json = { total: fallback.total || items.length, page: pageNo, list: items }
+      }
+    }
+    return {
+      list: await enrichVodListPosters(source.api, items),
+      total: Number(json.total || items.length) || items.length,
+      page: pageNo,
+      hasMore: items.length > 0,
+    }
+  }
+
+  async function searchCmsLibrary(keyword, pageNo = 1) {
+    const qe = encodeURIComponent(String(keyword || '').trim())
+    if (!qe) return loadCmsLibraryCategory(1, pageNo)
+    const seen = new Set()
+    const merged = []
+    await Promise.allSettled(VOD_SOURCES.filter(source => !['yinghua', 'a_napp03', 'ip51122'].includes(source.key)).map(async source => {
+      const urls = [
+        source.api + '?ac=detail&wd=' + qe + '&pg=' + encodeURIComponent(pageNo || 1),
+        source.api + '?ac=videolist&zm=' + qe + '&pg=' + encodeURIComponent(pageNo || 1),
+      ]
+      for (const url of urls) {
+        const json = await fetchJSONFast(url).catch(() => null)
+        const items = (json?.list || []).map(item => normalizeVodItem(item, source))
+        for (const item of items) {
+          const key = item._srcKey + ':' + item.vod_id + ':' + item.vod_name
+          if (seen.has(key)) continue
+          seen.add(key)
+          merged.push(item)
+        }
+        if (items.length) break
+      }
+    }))
+    return { list: merged, total: merged.length, page: pageNo, hasMore: false }
+  }
+
   async function showLibraryHome(initialQuery = '') {
     const content = el.querySelector('#t-content')
     const sources = [
+      { key: 'cms_lzzy', name: '星枢聚合片库', desc: '稳定点播 / 自动兜底 / 打开即有资源', categories: VOD_CATEGORIES.map(c => ({ ...c, typeId: (VOD_TYPE_MAP.lzzy || {})[c.id] || 1 })), list: loadCmsLibraryCategory, search: searchCmsLibrary },
       { key: 'a_napp03', name: A_NAPP03_SOURCE_NAME, desc: 'PC 实时入口，分类 / 搜索 / 播放列表', categories: NAPP03_CATEGORIES, groups: NAPP03_GROUPS, activeGroupId: 'home', loadCategories: loadNapp03Categories, list: loadAiyiCategory, search: searchAiyiNapp },
       { key: 'yinghua', name: YINGHUA_SOURCE_NAME, desc: '实时首页 / 动态分类 / 多线路播放', categories: YINGHUA_CATEGORIES, loadCategories: loadYinghuaCategories, list: loadYinghuaCategory, search: searchYinghua },
       { key: 'ip51122', name: IP51122_SOURCE_NAME, desc: '真实首页 / 搜索结果 / 详情页受原站防护限制', categories: PAGE_LIBRARY_CATEGORIES, loadCategories: loadIp51122Categories, list: loadIp51122Category, search: searchIp51122 },
@@ -3594,8 +3640,8 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     const renderOriginFallback = (source, message = '') => {
       return '<div class="tvbox-empty tvbox-origin-fallback">' +
         '<div class="tvbox-empty-icon">🌐</div>' +
-        '<div class="tvbox-empty-title">原站数据未接入成功</div>' +
-        '<div class="tvbox-empty-sub">' + escHtml(message || '当前站点需要原站 SPA/API 或浏览器防护会话，内嵌模式已停用，避免黑屏误导。') + '</div>' +
+        '<div class="tvbox-empty-title">当前原站暂不可用</div>' +
+        '<div class="tvbox-empty-sub">' + escHtml(message || '该站点需要原站 SPA/API 或防护会话，已保留入口；请优先使用「星枢聚合片库」稳定播放。') + '</div>' +
       '</div>'
     }
     const renderNapp03Filters = (source) => {
@@ -4184,6 +4230,12 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         const items = allItems.slice(start, start + pageSize)
         const displayResult = { ...result, list: items, page: libraryPage, hasMore: allItems.length > start + pageSize || Boolean(result?.hasMore) }
         if (!items.length && result?.message) {
+          const fallback = source.key !== 'cms_lzzy' ? await loadCmsLibraryCategory(1, 1).catch(() => null) : null
+          if (fallback?.list?.length) {
+            box.innerHTML = '<div class="tvbox-library-subtitle">当前原站暂不可用，已自动切换星枢聚合片库</div>' + renderCards(fallback.list.slice(0, getLibraryPageSize()), sourceByKey('cms_lzzy'), fallback)
+            bindLibraryResult(box, sourceByKey('cms_lzzy'), fallback)
+            return
+          }
           box.innerHTML = renderOriginFallback(source, result.message) || '<div class="tvbox-empty"><div class="tvbox-empty-title">暂无可显示内容</div><div class="tvbox-empty-sub">' + escHtml(result.message) + '</div></div>'
           return
         }
@@ -4191,6 +4243,12 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         bindLibraryResult(box, source, displayResult)
         scrollLibraryTop()
       } catch (e) {
+        const fallback = source.key !== 'cms_lzzy' ? await loadCmsLibraryCategory(1, 1).catch(() => null) : null
+        if (fallback?.list?.length) {
+          box.innerHTML = '<div class="tvbox-library-subtitle">当前站点加载失败，已自动切换星枢聚合片库</div>' + renderCards(fallback.list.slice(0, getLibraryPageSize()), sourceByKey('cms_lzzy'), fallback)
+          bindLibraryResult(box, sourceByKey('cms_lzzy'), fallback)
+          return
+        }
         box.innerHTML = '<div class="tvbox-empty tvbox-library-error"><div class="tvbox-empty-title">实时加载失败</div><div class="tvbox-empty-sub">' + escHtml(e.message || mt('loadFailed')) + '</div><button class="tvbox-library-retry" id="library-retry">重新加载</button></div>'
         box.querySelector('#library-retry')?.addEventListener('click', loadLibraryList)
       }

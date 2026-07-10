@@ -3084,3 +3084,397 @@
     color: rgba(255,255,255,.78) !important;
   }
 }
+
+/* ============================================
+   星枢影视 Mobile Native Redesign
+   说明：移动端不沿用桌面顶部栏/侧栏结构，使用独立手机 App Shell
+   ============================================ */
+@media (max-width: 760px), (pointer: coarse) {
+  .tvbox-root:has(.mobile-movie-app) {
+    min-height: 100dvh !important;
+    display: block !important;
+    background: #05070d !important;
+    color: #f8fbff !important;
+    overflow-x: hidden !important;
+  }
+
+  .tvbox-root:has(.mobile-movie-app) > .tvbox-navbar,
+  .tvbox-root:has(.mobile-movie-app) > .tvbox-catbar,
+  .tvbox-root:has(.mobile-movie-app) > .tvbox-srcbar {
+    display: none !important;
+  }
+
+  .tvbox-root:has(.mobile-movie-app) > .tvbox-content,
+  .tvbox-root:has(.mobile-movie-app) #t-content {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 100dvh !important;
+    background: #05070d !important;
+  }
+
+  .mobile-movie-app {
+    min-height: 100dvh;
+    padding: env(safe-area-inset-top, 0) 0 calc(82px + env(safe-area-inset-bottom, 0));
+    background:
+      radial-gradient(circle at 16% -8%, rgba(94, 132, 255, .36), transparent 36%),
+      radial-gradient(circle at 94% 4%, rgba(55, 220, 255, .20), transparent 30%),
+      linear-gradient(180deg, #070b15 0%, #05070d 46%, #070a12 100%);
+  }
+
+  .mobile-movie-hero {
+    padding: 16px 16px 10px;
+  }
+
+  .mobile-movie-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: rgba(239, 245, 255, .58);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .mobile-movie-status strong {
+    padding: 4px 9px;
+    border-radius: 999px;
+    color: #07101f;
+    background: #fff;
+    font-size: 11px;
+  }
+
+  .mobile-movie-title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 52px;
+    gap: 14px;
+    align-items: center;
+    margin-top: 18px;
+  }
+
+  .mobile-movie-kicker {
+    margin: 0 0 4px;
+    color: #6fe5ff;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .mobile-movie-title-row h1 {
+    margin: 0;
+    color: #fff;
+    font-size: clamp(28px, 8vw, 38px);
+    line-height: .98;
+    font-weight: 950;
+    letter-spacing: -.07em;
+  }
+
+  .mobile-movie-title-row span {
+    display: block;
+    margin-top: 8px;
+    max-width: 94%;
+    color: rgba(232, 240, 255, .62);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .mobile-movie-avatar {
+    width: 52px;
+    height: 52px;
+    border: 0;
+    border-radius: 20px;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 950;
+    background: linear-gradient(135deg, #5b8cff, #6fe5ff);
+    box-shadow: 0 18px 38px rgba(74, 128, 255, .34);
+  }
+
+  .mobile-movie-search {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 68px;
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  .mobile-movie-search input {
+    height: 48px;
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 18px;
+    padding: 0 16px;
+    color: #fff;
+    background: rgba(255, 255, 255, .075);
+    outline: none;
+    font-size: 15px;
+    backdrop-filter: blur(18px);
+  }
+
+  .mobile-movie-search input::placeholder { color: rgba(239, 245, 255, .42); }
+
+  .mobile-movie-search button {
+    border: 0;
+    border-radius: 18px;
+    color: #07101f;
+    background: #fff;
+    font-weight: 950;
+    font-size: 14px;
+  }
+
+  .mobile-movie-quick {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .mobile-movie-quick-btn {
+    min-height: 62px;
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 22px;
+    padding: 10px 8px;
+    text-align: left;
+    background: rgba(255, 255, 255, .065);
+    color: rgba(239, 245, 255, .66);
+  }
+
+  .mobile-movie-quick-btn strong,
+  .mobile-movie-quick-btn span {
+    display: block;
+  }
+
+  .mobile-movie-quick-btn strong {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 950;
+  }
+
+  .mobile-movie-quick-btn span {
+    margin-top: 3px;
+    font-size: 11px;
+  }
+
+  .mobile-movie-quick-btn.active {
+    background: linear-gradient(135deg, rgba(91, 140, 255, .95), rgba(111, 229, 255, .56));
+    box-shadow: 0 16px 36px rgba(65, 116, 255, .24);
+  }
+
+  .mobile-source-strip,
+  .mobile-history-strip,
+  .mobile-group-strip,
+  .mobile-cat-strip {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 0 16px 12px;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+
+  .mobile-source-strip::-webkit-scrollbar,
+  .mobile-history-strip::-webkit-scrollbar,
+  .mobile-group-strip::-webkit-scrollbar,
+  .mobile-cat-strip::-webkit-scrollbar { display: none; }
+
+  .mobile-source-card {
+    flex: 0 0 182px;
+    min-height: 94px;
+    scroll-snap-align: start;
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 26px;
+    padding: 15px;
+    text-align: left;
+    color: rgba(239, 245, 255, .68);
+    background: linear-gradient(180deg, rgba(255,255,255,.105), rgba(255,255,255,.045));
+    box-shadow: 0 16px 38px rgba(0,0,0,.24);
+  }
+
+  .mobile-source-card strong,
+  .mobile-source-card span { display: block; }
+  .mobile-source-card strong { color: #fff; font-size: 16px; font-weight: 950; letter-spacing: -.03em; }
+  .mobile-source-card span { margin-top: 8px; font-size: 11px; line-height: 1.35; }
+  .mobile-source-card.active {
+    background: linear-gradient(135deg, #ffffff, #dce8ff);
+    color: rgba(7,16,31,.68);
+  }
+  .mobile-source-card.active strong { color: #07101f; }
+
+  .mobile-history-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 34px;
+    border-radius: 999px;
+    padding: 0 8px 0 12px;
+    background: rgba(255,255,255,.075);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  .mobile-history-chip button {
+    border: 0;
+    background: transparent;
+    color: rgba(239,245,255,.76);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .mobile-history-chip .remove { color: rgba(239,245,255,.38); font-size: 15px; }
+
+  .mobile-group-chip,
+  .mobile-cat-chip {
+    flex: 0 0 auto;
+    height: 38px;
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 999px;
+    padding: 0 15px;
+    color: rgba(239,245,255,.72);
+    background: rgba(255,255,255,.07);
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .mobile-group-chip.active,
+  .mobile-cat-chip.active {
+    color: #07101f;
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .mobile-filter-wrap {
+    padding: 0 16px 4px;
+  }
+
+  .mobile-filter-wrap .tvbox-library-filters {
+    margin: 0 0 8px !important;
+    padding: 10px !important;
+    border: 1px solid rgba(255,255,255,.08) !important;
+    border-radius: 22px !important;
+    background: rgba(255,255,255,.055) !important;
+  }
+
+  .mobile-filter-wrap .tvbox-library-filter-row {
+    display: flex !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    padding: 3px 0 !important;
+    scrollbar-width: none !important;
+  }
+
+  .mobile-filter-wrap .tvbox-library-filter-row::-webkit-scrollbar { display: none !important; }
+  .mobile-filter-wrap .tvbox-library-filter-row > span { flex: 0 0 auto !important; color: rgba(239,245,255,.46) !important; font-size: 12px !important; }
+
+  .mobile-filter-wrap .tvbox-library-filter {
+    flex: 0 0 auto !important;
+    height: 30px !important;
+    border-radius: 999px !important;
+    border: 0 !important;
+    padding: 0 12px !important;
+    background: rgba(255,255,255,.07) !important;
+    color: rgba(239,245,255,.70) !important;
+    font-size: 12px !important;
+  }
+
+  .mobile-filter-wrap .tvbox-library-filter.active { background: #fff !important; color: #07101f !important; }
+
+  .mobile-movie-feed {
+    min-height: 50dvh;
+    padding: 0 16px 18px;
+  }
+
+  .mobile-feed-loading,
+  .mobile-movie-feed .tvbox-loading,
+  .mobile-movie-feed .tvbox-empty {
+    min-height: 260px !important;
+    border: 1px solid rgba(255,255,255,.08) !important;
+    border-radius: 28px !important;
+    background: rgba(255,255,255,.055) !important;
+    color: rgba(239,245,255,.68) !important;
+    display: grid !important;
+    place-items: center !important;
+    text-align: center !important;
+  }
+
+  .mobile-feed-loading div {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 3px solid rgba(255,255,255,.16);
+    border-top-color: #fff;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 10px;
+  }
+
+  .mobile-movie-feed .tvbox-library-card-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 18px 11px !important;
+  }
+
+  .mobile-movie-feed .tvbox-library-section { margin: 6px 0 24px !important; }
+  .mobile-movie-feed .tvbox-library-section-head { margin: 18px 0 12px !important; align-items: center !important; }
+  .mobile-movie-feed .tvbox-library-section-head h3 { color: #fff !important; font-size: 21px !important; font-weight: 950 !important; letter-spacing: -.05em !important; }
+
+  .mobile-movie-feed .tvbox-library-vod {
+    min-width: 0 !important;
+  }
+
+  .mobile-movie-feed .tvbox-library-vod-poster {
+    width: 100% !important;
+    aspect-ratio: 2 / 3 !important;
+    border: 0 !important;
+    border-radius: 22px !important;
+    overflow: hidden !important;
+    background: linear-gradient(135deg, #172136, #0b111e) !important;
+    box-shadow: 0 18px 36px rgba(0,0,0,.36) !important;
+  }
+
+  .mobile-movie-feed .tvbox-library-vod-poster img { width: 100% !important; height: 100% !important; object-fit: cover !important; }
+  .mobile-movie-feed .tvbox-library-vod-poster > span { border-radius: 999px !important; background: rgba(0,0,0,.58) !important; color: #fff !important; }
+  .mobile-movie-feed .tvbox-library-vod-title { margin-top: 9px !important; color: #fff !important; font-size: 14px !important; line-height: 1.28 !important; font-weight: 950 !important; }
+  .mobile-movie-feed .tvbox-library-vod-meta { color: rgba(239,245,255,.48) !important; font-size: 11px !important; }
+  .mobile-movie-feed .tvbox-library-card-actions { display: none !important; }
+
+  .mobile-movie-feed .tvbox-library-pager {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px !important;
+    padding: 18px 0 4px !important;
+  }
+
+  .mobile-movie-feed .tvbox-library-pager span,
+  .mobile-movie-feed .tvbox-library-jump { grid-column: 1 / -1 !important; color: rgba(239,245,255,.55) !important; text-align: center !important; }
+  .mobile-movie-feed .tvbox-library-pager button { height: 44px !important; border: 0 !important; border-radius: 17px !important; background: rgba(255,255,255,.10) !important; color: #fff !important; font-weight: 900 !important; }
+  .mobile-movie-feed .tvbox-library-pager button:not(:disabled):last-child { background: #fff !important; color: #07101f !important; }
+
+  .mobile-bottom-tabs {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0));
+    z-index: 120;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 7px;
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 26px;
+    background: rgba(9,13,24,.88);
+    backdrop-filter: blur(24px);
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+  }
+
+  .mobile-bottom-tabs button {
+    height: 52px;
+    border: 0;
+    border-radius: 20px;
+    background: transparent;
+    color: rgba(239,245,255,.52);
+    display: grid;
+    place-items: center;
+    gap: 1px;
+  }
+
+  .mobile-bottom-tabs span { font-size: 18px; line-height: 1; }
+  .mobile-bottom-tabs em { font-style: normal; font-size: 11px; font-weight: 900; }
+  .mobile-bottom-tabs button.active { color: #07101f; background: #fff; }
+}

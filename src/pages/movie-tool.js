@@ -3676,29 +3676,34 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     const renderShell = () => {
       const source = sourceByKey(activeSourceKey)
       const libraryHistory = getSearchHistory().slice(0, 8)
-      content.innerHTML = '<div class="tvbox-library-workspace">' +
-        '<aside class="tvbox-library-sidebar">' +
-          '<button class="tvbox-library-nav' + (activeLibraryView === 'home' ? ' active' : '') + '" data-view="home"><strong>星枢片库</strong><span>上次浏览 / 自动恢复</span></button>' +
-          '<button class="tvbox-library-nav' + (activeLibraryView === 'follow' ? ' active' : '') + '" data-view="follow"><strong>我的追剧</strong><span>收藏视频 / 观看进度</span></button>' +
-          '<button class="tvbox-library-nav' + (activeLibraryView === 'history' ? ' active' : '') + '" data-view="history"><strong>播放历史</strong><span>最近观看 / 播放记录</span></button>' +
-          '<div class="tvbox-library-side-title">实时资源站点</div>' +
-          '<div class="tvbox-library-side-sub">分类浏览</div>' +
-          sources.map(s => '<button class="tvbox-library-source' + (activeLibraryView === 'home' && s.key === activeSourceKey ? ' active' : '') + '" data-source="' + escHtml(s.key) + '"><strong>' + escHtml(s.name) + '</strong><span>' + escHtml(s.desc) + '</span></button>').join('') +
-        '</aside>' +
-        '<main class="tvbox-library-main">' +
-          '<div class="tvbox-library-toolbar">' +
-            '<div><div class="tvbox-library-title">' + escHtml(source.name) + '</div><div class="tvbox-library-desc">' + escHtml(source.desc) + '</div></div>' +
-            '<div class="tvbox-library-search"><input id="library-search-input" name="xingshu-library-search" type="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="搜索星枢片库 + 影视点播全部资源" value="' + escHtml(libraryQuery) + '" /><button id="library-search-btn">搜索</button></div>' +
+      const activeGroupId = source.activeGroupId || source.groups?.[0]?.id
+      const visibleCats = source.categories.filter(cat => !source.groups || cat.groupId === activeGroupId)
+      content.innerHTML = '<div class="mobile-movie-app">' +
+        '<header class="mobile-movie-hero">' +
+          '<div class="mobile-movie-status"><span>星枢影视</span><strong>Mobile</strong></div>' +
+          '<div class="mobile-movie-title-row"><div><p class="mobile-movie-kicker">今日片库</p><h1>' + escHtml(source.name) + '</h1><span>' + escHtml(source.desc) + '</span></div><button class="mobile-movie-avatar" data-view="history">影</button></div>' +
+          '<div class="mobile-movie-search"><input id="library-search-input" name="xingshu-library-search" type="search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="搜索电影、剧集、动漫" value="' + escHtml(libraryQuery) + '" /><button id="library-search-btn">搜索</button></div>' +
+          '<div class="mobile-movie-quick">' +
+            '<button class="mobile-movie-quick-btn' + (activeLibraryView === 'home' ? ' active' : '') + '" data-view="home"><strong>首页</strong><span>片库</span></button>' +
+            '<button class="mobile-movie-quick-btn' + (activeLibraryView === 'follow' ? ' active' : '') + '" data-view="follow"><strong>追剧</strong><span>收藏</span></button>' +
+            '<button class="mobile-movie-quick-btn' + (activeLibraryView === 'history' ? ' active' : '') + '" data-view="history"><strong>历史</strong><span>继续看</span></button>' +
           '</div>' +
-          '<div class="tvbox-library-search-history"' + (libraryHistory.length ? '' : ' style="display:none"') + '>' + libraryHistory.map(q => '<span class="tvbox-library-search-chip"><button data-q="' + escHtml(q) + '">' + escHtml(q) + '</button><button class="remove" data-remove-q="' + escHtml(q) + '">×</button></span>').join('') + '</div>' +
-          '<div class="tvbox-library-groups">' + (source.groups ? source.groups.map(group => '<button class="tvbox-library-group' + (group.id === (source.activeGroupId || source.groups[0]?.id) ? ' active' : '') + '" data-group="' + escHtml(group.id) + '">' + escHtml(group.name) + '</button>').join('') : '') + '</div>' +
-          '<div class="tvbox-library-cats">' + source.categories.filter(cat => !source.groups || cat.groupId === (source.activeGroupId || source.groups[0]?.id)).map(cat => '<button class="tvbox-library-cat' + (cat.id === activeCategory.id ? ' active' : '') + '" data-cat="' + escHtml(cat.id) + '">' + escHtml(cat.name) + '</button>').join('') + '</div>' +
-          renderNapp03Filters(source) +
-          '<div id="library-list" class="tvbox-library-list"><div class="tvbox-loading"><div class="tvbox-loading-icon"></div><span class="tvbox-loading-text">' + escHtml(mt('loading')) + '</span></div></div>' +
-        '</main>' +
+        '</header>' +
+        '<section class="mobile-source-strip" aria-label="片源切换">' + sources.map(s => '<button class="mobile-source-card' + (activeLibraryView === 'home' && s.key === activeSourceKey ? ' active' : '') + '" data-source="' + escHtml(s.key) + '"><strong>' + escHtml(s.name) + '</strong><span>' + escHtml(s.desc.replace(/^PC\s*/, '')) + '</span></button>').join('') + '</section>' +
+        (libraryHistory.length ? '<section class="mobile-history-strip">' + libraryHistory.map(q => '<span class="mobile-history-chip"><button data-q="' + escHtml(q) + '">' + escHtml(q) + '</button><button class="remove" data-remove-q="' + escHtml(q) + '">×</button></span>').join('') + '</section>' : '') +
+        (source.groups ? '<section class="mobile-group-strip">' + source.groups.map(group => '<button class="mobile-group-chip' + (group.id === activeGroupId ? ' active' : '') + '" data-group="' + escHtml(group.id) + '">' + escHtml(group.name) + '</button>').join('') + '</section>' : '') +
+        '<section class="mobile-cat-strip">' + visibleCats.map(cat => '<button class="mobile-cat-chip' + (cat.id === activeCategory.id ? ' active' : '') + '" data-cat="' + escHtml(cat.id) + '">' + escHtml(cat.name) + '</button>').join('') + '</section>' +
+        '<section class="mobile-filter-wrap">' + renderNapp03Filters(source) + '</section>' +
+        '<main id="library-list" class="mobile-movie-feed"><div class="mobile-feed-loading"><div></div><span>' + escHtml(mt('loading')) + '</span></div></main>' +
+        '<nav class="mobile-bottom-tabs">' +
+          '<button class="active" data-mode="library"><span>⌂</span><em>片库</em></button>' +
+          '<button data-mode="crawl"><span>⌕</span><em>嗅探</em></button>' +
+          '<button data-mode="missav"><span>★</span><em>精品</em></button>' +
+          '<button data-mode="myavlive"><span>◉</span><em>直播</em></button>' +
+        '</nav>' +
       '</div>'
 
-      content.querySelectorAll('.tvbox-library-nav').forEach(btn => btn.addEventListener('click', () => {
+      content.querySelectorAll('.mobile-movie-quick-btn, .mobile-movie-avatar').forEach(btn => btn.addEventListener('click', () => {
         activeLibraryView = btn.dataset.view || 'home'
         libraryQuery = ''
         persistLibraryChoice()
@@ -3724,7 +3729,7 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         else if (activeLibraryView === 'history') renderLibraryHistoryList()
         else loadLibraryList()
       }))
-      content.querySelectorAll('.tvbox-library-source').forEach(btn => btn.addEventListener('click', async () => {
+      content.querySelectorAll('.mobile-source-card').forEach(btn => btn.addEventListener('click', async () => {
         activeLibraryView = 'home'
         activeSourceKey = btn.dataset.source
         const next = sourceByKey(activeSourceKey)
@@ -3741,7 +3746,7 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         renderShell()
         loadLibraryList()
       }))
-      content.querySelectorAll('.tvbox-library-group').forEach(btn => btn.addEventListener('click', () => {
+      content.querySelectorAll('.mobile-group-chip').forEach(btn => btn.addEventListener('click', () => {
         const source = sourceByKey(activeSourceKey)
         source.activeGroupId = btn.dataset.group
         activeCategory = source.categories.find(c => c.id === readLibraryUserState().categories?.[activeSourceKey] && c.groupId === source.activeGroupId) || source.categories.find(c => c.groupId === source.activeGroupId) || source.categories[0]
@@ -3751,7 +3756,7 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         renderShell()
         loadLibraryList()
       }))
-      content.querySelectorAll('.tvbox-library-cat').forEach(btn => btn.addEventListener('click', () => {
+      content.querySelectorAll('.mobile-cat-chip').forEach(btn => btn.addEventListener('click', () => {
         const source = sourceByKey(activeSourceKey)
         activeCategory = source.categories.find(c => c.id === btn.dataset.cat) || source.categories[0]
         persistLibraryChoice()
@@ -3770,6 +3775,11 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
         libraryQuery = ''
         renderShell()
         loadLibraryList()
+      }))
+      content.querySelectorAll('.mobile-bottom-tabs [data-mode]').forEach(btn => btn.addEventListener('click', async () => {
+        const targetMode = btn.dataset.mode
+        const modeBtn = el.querySelector('.tvbox-mode-tab[data-mode="' + targetMode + '"]')
+        if (modeBtn) modeBtn.click()
       }))
       content.querySelector('#library-search-btn')?.addEventListener('click', () => {
         libraryQuery = content.querySelector('#library-search-input')?.value.trim() || ''

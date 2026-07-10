@@ -18,70 +18,104 @@ const CODEX_PROMPT_USAGE_TEXT: &str =
     include_str!("../resources/codex提示词/codex提示词使用方法.txt");
 const CODEX_INSTRUCTION_TEXT: &str = include_str!("../resources/codex提示词/instruction.md");
 
+fn is_blocked_hls_proxy_host(host: &str) -> bool {
+    let host = host.trim().trim_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return is_blocked_hls_proxy_ip(&host);
+    }
+    false
+}
+
+fn is_blocked_hls_proxy_ip(host: &str) -> bool {
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+        }
+        Err(_) => true,
+    }
+}
+
+fn hls_proxy_content_type(path: &str) -> &'static str {
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.contains(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else if lower_path.ends_with(".ts") {
+        "video/mp2t"
+    } else if lower_path.ends_with(".m4s") {
+        "video/iso.segment"
+    } else if lower_path.ends_with(".mp4") {
+        "video/mp4"
+    } else if lower_path.ends_with(".aac") {
+        "audio/aac"
+    } else if lower_path.ends_with(".vtt") {
+        "text/vtt; charset=utf-8"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 fn hls_proxy_fetch(target: &str, proxy_prefix: &str) -> Result<(Vec<u8>, &'static str), String> {
     let parsed = url::Url::parse(target).map_err(|_| "bad url".to_string())?;
-    if parsed.scheme() != "https" {
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
         return Err("bad scheme".to_string());
     }
     let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    let allowed = host == "surrit.com"
-        || host.ends_with(".surrit.com")
-        || host == "fourhoi.com"
-        || host.ends_with(".fourhoi.com")
-        || host == "doppiocdn.com"
-        || host.ends_with(".doppiocdn.com")
-        || host == "doppiocdn1.com"
-        || host.ends_with(".doppiocdn1.com")
-        || host == "doppiocdn.media"
-        || host.ends_with(".doppiocdn.media")
-        || host == "doppiocdn.net"
-        || host.ends_with(".doppiocdn.net")
-        || host == "doppiocdn.org"
-        || host.ends_with(".doppiocdn.org")
-        || host == "doppiocdn.live"
-        || host.ends_with(".doppiocdn.live");
-    if !allowed {
+    if is_blocked_hls_proxy_host(&host) {
         return Err("blocked host".to_string());
     }
 
-    let (origin, referer) = if host.contains("doppiocdn") {
-        ("https://zh.myavlive.com", "https://zh.myavlive.com/")
-    } else {
-        ("https://missav.live", "https://missav.live/")
-    };
-
-    let mut command = std::process::Command::new("curl.exe");
-    #[cfg(target_os = "windows")]
-    command.creation_flags(0x08000000);
-    let output = command
-        .args([
-            "-k",
-            "-L",
-            "-sS",
-            "--compressed",
-            "--max-time",
-            "25",
-            "-A",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "-H",
-            "Accept: */*",
-            "-H",
-            &format!("Origin: {origin}"),
-            "-H",
-            &format!("Referer: {referer}"),
-            target,
-        ])
-        .output()
-        .map_err(|e| format!("fetch failed: {e}"))?;
-
-    if !output.status.success() {
-        return Err("upstream failed".to_string());
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/vnd.apple.mpegurl, video/*, audio/*, */*"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_LANGUAGE,
+        reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+    );
+    if let Ok(referer) = format!("{}://{}/", parsed.scheme(), host).parse() {
+        headers.insert(reqwest::header::REFERER, referer);
     }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .gzip(true)
+        .danger_accept_invalid_certs(true)
+        .user_agent("Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36")
+        .default_headers(headers)
+        .build()
+        .map_err(|e| format!("client failed: {e}"))?;
+
+    let resp = client
+        .get(parsed.clone())
+        .send()
+        .map_err(|e| format!("upstream request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("upstream HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .map_err(|e| format!("upstream read failed: {e}"))?
+        .to_vec();
 
     let lower_path = parsed.path().to_ascii_lowercase();
     if lower_path.contains(".m3u8") {
-        let text = String::from_utf8_lossy(&output.stdout).to_string();
-        let mut rewritten = String::with_capacity(text.len() + 256);
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let mut rewritten = String::with_capacity(text.len() + 512);
         for line in text.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -90,34 +124,23 @@ fn hls_proxy_fetch(target: &str, proxy_prefix: &str) -> Result<(Vec<u8>, &'stati
                 continue;
             }
             if trimmed.starts_with('#') {
-                if (trimmed.contains("URI=\"") || trimmed.contains("URI='"))
-                    && !trimmed.starts_with("#EXT-X-STREAM-INF")
-                {
-                    let mut next_line = line.to_string();
-                    for quote in ["\"", "'"] {
-                        let needle = format!("URI={quote}");
-                        if let Some(start) = next_line.find(&needle) {
-                            let value_start = start + needle.len();
-                            if let Some(end_rel) = next_line[value_start..].find(quote) {
-                                let value_end = value_start + end_rel;
-                                let raw = &next_line[value_start..value_end];
-                                if let Ok(next) = parsed.join(raw) {
-                                    let proxied = format!(
-                                        "{}{}",
-                                        proxy_prefix,
-                                        urlencoding::encode(next.as_str())
-                                    );
-                                    next_line.replace_range(value_start..value_end, &proxied);
-                                }
+                let mut next_line = line.to_string();
+                for quote in ["\"", "'"] {
+                    let needle = format!("URI={quote}");
+                    if let Some(start) = next_line.find(&needle) {
+                        let value_start = start + needle.len();
+                        if let Some(end_rel) = next_line[value_start..].find(quote) {
+                            let value_end = value_start + end_rel;
+                            let raw = &next_line[value_start..value_end];
+                            if let Ok(next) = parsed.join(raw) {
+                                let proxied = format!("{}{}", proxy_prefix, urlencoding::encode(next.as_str()));
+                                next_line.replace_range(value_start..value_end, &proxied);
                             }
                         }
                     }
-                    rewritten.push_str(&next_line);
-                    rewritten.push('\n');
-                } else {
-                    rewritten.push_str(line);
-                    rewritten.push('\n');
                 }
+                rewritten.push_str(&next_line);
+                rewritten.push('\n');
                 continue;
             }
             let next = parsed
@@ -129,14 +152,8 @@ fn hls_proxy_fetch(target: &str, proxy_prefix: &str) -> Result<(Vec<u8>, &'stati
             rewritten.push('\n');
         }
         Ok((rewritten.into_bytes(), "application/vnd.apple.mpegurl"))
-    } else if lower_path.ends_with(".ts") {
-        Ok((output.stdout, "video/mp2t"))
-    } else if lower_path.ends_with(".m4s") {
-        Ok((output.stdout, "video/iso.segment"))
-    } else if lower_path.ends_with(".mp4") {
-        Ok((output.stdout, "video/mp4"))
     } else {
-        Ok((output.stdout, "application/octet-stream"))
+        Ok((bytes, hls_proxy_content_type(parsed.path())))
     }
 }
 

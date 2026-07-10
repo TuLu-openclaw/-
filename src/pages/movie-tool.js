@@ -467,6 +467,23 @@ function isDirectVideoUrl(url) {
   return /\.(m3u8|mp4|mpd)(?:[?#]|$)/i.test(String(url || ''))
 }
 
+function toLocalPlayableUrl(url) {
+  const value = String(url || '').trim()
+  if (!value || value === '#') return value
+  if (/^(?:tauri:\/\/localhost|http:\/\/127\.0\.0\.1:18188)\/hls-proxy\?u=/i.test(value)) return value
+  if (!/^https?:\/\//i.test(value)) return value
+  if (!isDirectVideoUrl(value)) return value
+  return 'http://127.0.0.1:18188/hls-proxy?u=' + encodeURIComponent(value)
+}
+
+function toLocalPlayableList(list) {
+  return (Array.isArray(list) ? list : []).map(item => {
+    if (typeof item === 'string') return toLocalPlayableUrl(item)
+    if (item && typeof item === 'object') return { ...item, url: toLocalPlayableUrl(item.url) }
+    return item
+  })
+}
+
 function normalizeEpisodeUrl(url, baseUrl) {
   if (!url) return ''
   const raw = String(url).trim()
@@ -4007,7 +4024,7 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
       const detail = await fetchMissavDetail(url)
       const results = (detail.playUrls || []).filter(x => x?.url && isDirectVideoUrl(x.url))
       if (!results.length) throw new Error('当前资源暂不可播放')
-      const eps = results.map((x, index) => ({ name: x.name || ('线路 ' + (index + 1)), url: toInternalMediaUrl(x.url) }))
+      const eps = results.map((x, index) => ({ name: x.name || ('线路 ' + (index + 1)), url: toLocalPlayableUrl(x.url) }))
       const urls = eps.map(x => x.url)
       closePlayer()
       await playCrawlVideo(title || '精选内容', urls[0], 0, eps, urls, true)
@@ -4388,17 +4405,17 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
     let playableUrl = url
     let resolvedForStandalone = false
     try {
-      playableUrl = await resolvePlayableUrl(url)
+      playableUrl = toLocalPlayableUrl(await resolvePlayableUrl(url))
       resolvedForStandalone = playableUrl !== url || isDirectVideoUrl(playableUrl)
     } catch (e) {
       console.warn('[movie] 播放页解析失败:', e?.message || e)
     }
     const selectedOriginalUrl = url
-    const normalizedEps = Array.isArray(allEps) && allEps.length ? allEps.map(e => ({ ...e, url: e.url === selectedOriginalUrl ? playableUrl : e.url })) : [{ epName: epName || name || '当前播放', url: playableUrl }]
-    const normalizedUrls = Array.isArray(fallbackUrls) && fallbackUrls.length ? fallbackUrls.map(u => u === selectedOriginalUrl ? playableUrl : u) : normalizedEps.map(e => e.url).filter(Boolean)
+    const normalizedEps = Array.isArray(allEps) && allEps.length ? allEps.map(e => ({ ...e, url: toLocalPlayableUrl(e.url === selectedOriginalUrl ? playableUrl : e.url) })) : [{ epName: epName || name || '当前播放', url: playableUrl }]
+    const normalizedUrls = Array.isArray(fallbackUrls) && fallbackUrls.length ? fallbackUrls.map(u => toLocalPlayableUrl(u === selectedOriginalUrl ? playableUrl : u)) : normalizedEps.map(e => e.url).filter(Boolean)
     const normalizedLines = Array.isArray(allLines) && allLines.length ? allLines.map(line => ({
       ...line,
-      urls: Array.isArray(line.urls) ? line.urls.map(e => ({ ...e, url: e.url === selectedOriginalUrl ? playableUrl : e.url })) : [],
+      urls: Array.isArray(line.urls) ? line.urls.map(e => ({ ...e, url: toLocalPlayableUrl(e.url === selectedOriginalUrl ? playableUrl : e.url) })) : [],
     })) : [{ name: source || '当前线路', urls: normalizedEps.map((e, i) => ({ epName: e.epName || e.name || ('第 ' + (i + 1) + ' 集'), url: e.url || normalizedUrls[i] || playableUrl })) }]
     playingEp = { id, name, source, epName, pic, epUrl: playableUrl, allUrls: normalizedUrls, allEps: normalizedEps, allLines: normalizedLines, lineIndex: activeLineIndex || 0 }
     const resume = 0
@@ -4723,7 +4740,8 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
       }
       syncEmbeddedEpisodeContext(playableUrl)
       if (!playableUrl || playableUrl === '#') { body.innerHTML = '<div class="tvbox-playback-error"><div class="tvbox-playback-error-title">' + escHtml(mt('noPlaybackUrl')) + '</div></div>'; return }
-      isM3u8 = isDirectVideoUrl(playableUrl) ? playableUrl.includes('.m3u8') : isM3u8
+      playableUrl = toLocalPlayableUrl(playableUrl)
+      isM3u8 = isDirectVideoUrl(playableUrl) ? playableUrl.includes('.m3u8') || decodeURIComponent(playableUrl).includes('.m3u8') : isM3u8
       url = playableUrl
 
       if (isM3u8) {
@@ -4881,7 +4899,7 @@ async function parsePageDetailFromHtml(html, baseUrl, detailId, name, pic) {
   async function openFloatPlayer(name, url, id, source, epName, pic, allUrls, startProgress, allEps) {
     // 优先使用独立 Tauri 窗口播放；失败时回退到内嵌播放器并给出可见反馈。
     if (!url || url === '#') return
-    const useUrl = pickDirectUrl(url)
+    const useUrl = toLocalPlayableUrl(pickDirectUrl(url))
     const resume = 0
     playingEp = { id, source, epName, epUrl: useUrl, pic, allUrls: allUrls || [], allEps: allEps || [] }
     const opened = await openStandalonePlayer({
@@ -4935,18 +4953,18 @@ function pickDirectUrl(url) {
     if (vid && vid.duration > 0 && playingEp) updatePlayProgress(playingEp.id, playingEp.source, vid.currentTime, playingEp.epName, vid.duration)
     if (window._floatHls) { window._floatHls.destroy(); window._floatHls = null }
     const ep = getFloatEpisodeByUrl(nextUrl)
-    _floatState.currentUrl = nextUrl
-    if (playingEp) playingEp = { ...playingEp, epName: ep?.epName || ep?.name || playingEp.epName, epUrl: nextUrl }
+    _floatState.currentUrl = toLocalPlayableUrl(nextUrl)
+    if (playingEp) playingEp = { ...playingEp, epName: ep?.epName || ep?.name || playingEp.epName, epUrl: _floatState.currentUrl }
     if (playingEp?.id && playingEp?.source) {
       upsertPlayHistory({
         id: playingEp.id, name: _floatState.title || playingEp.epName || '播放中', pic: playingEp.pic || '',
-        source: playingEp.source, epName: playingEp.epName, epUrl: nextUrl, progress: 0, duration: 0,
+        source: playingEp.source, epName: playingEp.epName, epUrl: _floatState.currentUrl, progress: 0, duration: 0,
         allUrls: playingEp.allUrls || _floatState.allUrls || [], allEps: playingEp.allEps || [],
       })
     }
     const vidWrap = document.getElementById('_fvid'); if (vidWrap) vidWrap.innerHTML = ''
-    const isM3u8 = nextUrl.includes('.m3u8'); const isMp4 = nextUrl.includes('.mp4')
-    if (isM3u8 || isMp4) { if (isM3u8) loadVideoIntoFloat(nextUrl, resumeProgress); else loadMp4IntoFloat(nextUrl, resumeProgress) }
+    const isM3u8 = _floatState.currentUrl.includes('.m3u8') || decodeURIComponent(_floatState.currentUrl).includes('.m3u8'); const isMp4 = _floatState.currentUrl.includes('.mp4') || decodeURIComponent(_floatState.currentUrl).includes('.mp4')
+    if (isM3u8 || isMp4) { if (isM3u8) loadVideoIntoFloat(_floatState.currentUrl, resumeProgress); else loadMp4IntoFloat(_floatState.currentUrl, resumeProgress) }
     else if (vidWrap) vidWrap.innerHTML = renderFloatPlaybackError(nextUrl, mt('notDirectVideoUrl'))
   }
 
@@ -4961,7 +4979,7 @@ function pickDirectUrl(url) {
     if (window.Hls && window.Hls.isSupported()) {
       const hls = new window.Hls()
       window._floatHls = hls
-      hls.loadSource(url)
+      hls.loadSource(toLocalPlayableUrl(url))
       hls.attachMedia(video)
       hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
         const levels = hls.levels || []
@@ -5023,7 +5041,7 @@ function pickDirectUrl(url) {
     const video = document.createElement('video')
     video.controls = true
     vidWrap.appendChild(video)
-    video.src = url
+    video.src = toLocalPlayableUrl(url)
     if (resumeProgress > 0) {
       video.addEventListener('loadedmetadata', () => {
         video.currentTime = Math.min(resumeProgress, video.duration)
@@ -5550,10 +5568,7 @@ function pickDirectUrl(url) {
         const detail = await fetchMissavDetail(url)
         const results = (detail.playUrls || []).filter(x => x?.url && isDirectVideoUrl(x.url))
         if (!results.length) throw new Error('当前资源暂不可播放：详情页未解析到 m3u8/mp4 地址')
-        const toMissavPlayableUrl = value => /^https:\/\/(?:[^/]+\.)?surrit\.com\//i.test(String(value || '').trim())
-          ? 'http://127.0.0.1:18188/hls-proxy?u=' + encodeURIComponent(String(value || '').trim())
-          : String(value || '').trim()
-        const eps = results.map((x, index) => ({ name: x.name || ('线路 ' + (index + 1)), url: toMissavPlayableUrl(x.url) }))
+        const eps = results.map((x, index) => ({ name: x.name || ('线路 ' + (index + 1)), url: toLocalPlayableUrl(x.url) }))
         const urls = eps.map(x => x.url)
         closePlayer()
         await playCrawlVideo(title, urls[0], 0, eps, urls, true)
@@ -6280,7 +6295,7 @@ function pickDirectUrl(url) {
       card.addEventListener('click', () => {
         const idx = parseInt(card.dataset.index)
         const r = _crawlResults[idx]
-        if (r) playCrawlVideo(r.name, r.url, 0, [], [r.url])
+        if (r) playCrawlVideo(r.name, toLocalPlayableUrl(r.url), 0, [], [toLocalPlayableUrl(r.url)])
       })
     })
   }
@@ -6288,7 +6303,10 @@ function pickDirectUrl(url) {
   // playCrawlVideo: 独立窗口播放（不影响主界面）
   async function playCrawlVideo(name, url, resume = 0, allEps, allUrls, strictStandalone = false, extraCtx = {}) {
     resume = 0
-    const ctx = { id: url.startsWith('tauri://localhost/hls-proxy') ? name : url, source: 'crawl', epName: name, ...extraCtx }
+    url = toLocalPlayableUrl(url)
+    allEps = toLocalPlayableList(allEps)
+    allUrls = toLocalPlayableList(allUrls)
+    const ctx = { id: url.startsWith('tauri://localhost/hls-proxy') || url.startsWith('http://127.0.0.1:18188/hls-proxy') ? name : url, source: 'crawl', epName: name, ...extraCtx }
     const { invoke } = await import('@tauri-apps/api/core').catch(() => ({}))
     if (invoke) {
       try {
@@ -6357,7 +6375,7 @@ function pickDirectUrl(url) {
         // 直链直接播
         if (isDirectVideoUrl(parsedUrl)) {
           overlay.remove()
-          openFloatPlayer(mt('directPlayback'), parsedUrl, parsedUrl, 'url_input', mt('directPlayback'), '', [parsedUrl], 0)
+          openFloatPlayer(mt('directPlayback'), toLocalPlayableUrl(parsedUrl), parsedUrl, 'url_input', mt('directPlayback'), '', [toLocalPlayableUrl(parsedUrl)], 0)
           return
         }
 
